@@ -1,0 +1,1234 @@
+import { useEffect, useRef, useState, useMemo, useId, memo } from "react";
+import { motion } from "framer-motion";
+import {
+  CandlestickSeries,
+  ColorType,
+  createChart,
+  HistogramSeries,
+  LineSeries,
+  type Time,
+  type IChartApi,
+  type ISeriesApi,
+} from "lightweight-charts";
+import { useQuery } from "@tanstack/react-query";
+import { cn, fmtNum, fmtPct } from "@/modules/mimir/lib/format";
+import { Card, CardHeader, CardContent } from "@/modules/mimir/components/mimir/card";
+import { api } from "@/modules/mimir/lib/api";
+import { marketDataStore } from "@/modules/mimir/providers/MarketDataProvider";
+import type { Candle, SymbolForecast, Suggestion } from "@/modules/mimir/types/api";
+import { SPRING_SNAPPY } from "@/modules/mimir/lib/motion";
+
+const TIMEFRAMES = [
+  { label: "1m", days: 5, interval: "1minute" }, // 5 days to ensure we hit a trading session even on long weekends
+  { label: "15m", days: 7, interval: "15minute" },
+  { label: "1H", days: 30, interval: "60minute" },
+  { label: "1D", days: 365, interval: "day" },
+] as const;
+
+const PROJECTION_LOOKBACK = { label: "90D", days: 90, interval: "day" as const };
+
+function getNSECandleStart(epochSec: number, interval: string): number {
+  const IST_OFFSET = 19800; // +05:30 in seconds
+  const istEpoch = epochSec + IST_OFFSET;
+  
+  if (interval === "day") {
+    return istEpoch - (istEpoch % 86400) - IST_OFFSET;
+  }
+  
+  const d = new Date(istEpoch * 1000);
+  const h = d.getUTCHours();
+  const m = d.getUTCMinutes();
+  
+  // NSE Market Open: 09:15 IST, Close: 15:30 IST
+  const openMins = 9 * 60 + 15;
+  const closeMins = 15 * 60 + 30;
+  let currentMins = h * 60 + m;
+  
+  // If a tick arrives before 09:15, snap it to 09:15
+  if (currentMins < openMins) currentMins = openMins;
+  // If a tick arrives at or after 15:30, clamp it to the final bucket of the day
+  if (currentMins >= closeMins) currentMins = closeMins - 1;
+  
+  const bucketElapsed = currentMins - openMins;
+  
+  let intervalMins = 1;
+  if (interval === "15minute") intervalMins = 15;
+  else if (interval === "60minute") intervalMins = 60;
+  
+  const bucketStartElapsed = Math.floor(bucketElapsed / intervalMins) * intervalMins;
+  const bucketStartMins = openMins + bucketStartElapsed;
+  
+  const startOfDayIst = istEpoch - (istEpoch % 86400);
+  const bucketStartIst = startOfDayIst + bucketStartMins * 60;
+  
+  return bucketStartIst - IST_OFFSET;
+}
+
+interface PriceChartProps {
+  symbol: string;
+  chartMode: "actual" | "forecast";
+  onChartModeChange: (mode: "actual" | "forecast") => void;
+  isMarketOpen?: boolean;
+  suggestion?: Suggestion | null;
+  position?: import("@/modules/mimir/types/api").PaperPosition | null;
+  isAuthenticated?: boolean;
+}
+
+// memo: the chart is the single heaviest component (lightweight-charts instance
+// + several series). Dashboard re-renders ~4×/s during scans and on every query
+// refetch; without memo each of those re-runs the whole chart function body.
+export const PriceChart = memo(function PriceChart({ symbol, chartMode, onChartModeChange, suggestion, position, isAuthenticated }: PriceChartProps) {
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>(TIMEFRAMES[3]); // Default to 1D
+  const [showEma, setShowEma] = useState(true);
+  const [showVwap, setShowVwap] = useState(true);
+  const legendRef = useRef<HTMLDivElement>(null);
+  const chartId = useId();
+
+  const activeTf = chartMode === "forecast" ? PROJECTION_LOOKBACK : timeframe;
+  const currentChartKey = `${symbol}-${activeTf.label}-${chartMode}`;
+
+  const { data: candleData, isLoading: isCandlesLoading, isError: isCandlesError } = useQuery<{ candles: Candle[] }>({
+    queryKey: ['candles', symbol, activeTf.interval, activeTf.days],
+    queryFn: () => api.candles(symbol, activeTf.interval, activeTf.days),
+    enabled: Boolean(symbol) && isAuthenticated,
+    staleTime: 10000,
+    gcTime: 60000 * 15, // 15 minutes
+    refetchInterval: 15000,
+  });
+
+  const { data: forecastData } = useQuery<SymbolForecast>({
+    queryKey: ['forecast', symbol],
+    queryFn: () => api.forecast(symbol),
+    enabled: Boolean(symbol) && isAuthenticated,
+    retry: false,
+    refetchInterval: 60000,
+  });
+
+  const candles = useMemo(() => {
+    const raw = candleData?.candles ?? [];
+    if (!raw.length) return [];
+
+    // Parse timestamps once — avoids repeated Date.parse per candle (#11)
+    const withEpoch = raw.map(c => ({ ...c, _epoch: Date.parse(c.ts) }));
+    // Guard against malformed timestamps (#2)
+    const valid = withEpoch.filter(c => Number.isFinite(c._epoch));
+    valid.sort((a, b) => a._epoch - b._epoch);
+
+    const clean: Candle[] = [];
+
+    for (let i = 0; i < valid.length; i++) {
+      const c = valid[i]!;
+      // Dedup by parsed epoch
+      if (i > 0 && c._epoch === valid[i - 1]!._epoch) continue;
+
+      if (!Number.isFinite(c.close) || c.close <= 0 || !Number.isFinite(c.open) || c.open <= 0) continue;
+
+      // Clamp outlier wicks (bad exchange prints) to the body so one bad high/low can't blow up y-axis autoscale
+      const bodyHigh = Math.max(c.open, c.close);
+      const bodyLow = Math.min(c.open, c.close);
+      const hi = Number.isFinite(c.high) ? c.high : bodyHigh;
+      const lo = Number.isFinite(c.low) ? c.low : bodyLow;
+      // Compare against body range, not just close (#3)
+      if (hi <= 0 || lo <= 0 || hi > bodyHigh * 1.5 || lo < bodyLow * 0.5) {
+        clean.push({ ...c, high: bodyHigh, low: bodyLow });
+        continue;
+      }
+
+      clean.push(c);
+    }
+    return clean;
+  }, [candleData?.candles]);
+
+  const atr = useMemo(() => {
+    if (candles.length < 14) return 0;
+    let sumTR = 0;
+    for (let i = candles.length - 14; i < candles.length; i++) {
+      const c = candles[i]!;
+      const prevC = candles[i - 1];
+      const prevClose = prevC ? prevC.close : c.open;
+      const tr = Math.max(c.high - c.low, Math.abs(c.high - prevClose), Math.abs(c.low - prevClose));
+      sumTR += tr;
+    }
+    return sumTR / 14;
+  }, [candles]);
+
+  const forecast = forecastData?.available ? forecastData : null;
+  const forecastIsFallback = Boolean(forecast?.isFallback);
+  const loading = isCandlesLoading;
+  const error = isCandlesError ? "Unavailable" : null;
+  
+  // Only consider it 'loaded' for the current key if we are no longer fetching it.
+  // This prevents the chart from fitting bounds to old stale data while new data is fetching.
+  // const loadedChartKey = isCandlesFetching ? "" : currentChartKey;
+
+  // tick removed to avoid rerenders
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const medianRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const upperRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const lowerRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const upper90Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const lower10Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const emaRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const vwapRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const lastFitKey = useRef<string>("");
+
+  const entryLineRef = useRef<import("lightweight-charts").IPriceLine | null>(null);
+  const stopLineRef = useRef<import("lightweight-charts").IPriceLine | null>(null);
+  const targetLineRef = useRef<import("lightweight-charts").IPriceLine | null>(null);
+
+  const posEntryLineRef = useRef<import("lightweight-charts").IPriceLine | null>(null);
+  const posStopLineRef = useRef<import("lightweight-charts").IPriceLine | null>(null);
+  const posTargetLineRef = useRef<import("lightweight-charts").IPriceLine | null>(null);
+  const aiTargetLineRef = useRef<import("lightweight-charts").IPriceLine | null>(null);
+  const liveBarRef = useRef<{ time: Time; open: number; high: number; low: number; close: number; volume: number; vwapTurnover: number } | null>(null);
+  // Keep activeTf in a ref so the tick handler always reads the latest value (#1)
+  const activeTfRef = useRef(activeTf);
+  activeTfRef.current = activeTf;
+
+  // Stable refs for values used inside the subscription effect — avoids unsub/resub on every react-query refetch
+  const candlesRef = useRef(candles);
+  candlesRef.current = candles;
+  const atrRef = useRef(atr);
+  atrRef.current = atr;
+
+
+  // displayPrice and changePct removed to use LivePrice and LiveChangePct
+
+  // useQuery handles fetching now
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const isLightInitial = document.documentElement.classList.contains("light");
+    const bgColor = "transparent";
+    const textColor = isLightInitial ? "#1c1917" : "#f5f5f5";
+
+    const chart = createChart(containerRef.current, {
+      width: containerRef.current.clientWidth,
+      height: containerRef.current.clientHeight,
+      layout: {
+        background: { type: ColorType.Solid, color: bgColor },
+        textColor: textColor,
+        fontFamily: '"Geist Mono", monospace',
+        attributionLogo: false,
+      },
+      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+      rightPriceScale: { 
+        borderVisible: false,
+        autoScale: true,
+        scaleMargins: {
+          top: 0.1,
+          bottom: 0.2,
+        },
+      },
+      leftPriceScale: { visible: false, borderVisible: false },
+      timeScale: { 
+        borderVisible: false, 
+        timeVisible: true, 
+        secondsVisible: false,
+        shiftVisibleRangeOnNewBar: true,
+        allowShiftVisibleRangeOnWhitespaceReplacement: true,
+        minimumHeight: 0,
+        tickMarkFormatter: (time: Time, tickMarkType: number) => {
+          let sec = 0;
+          if (typeof time === "number") sec = time;
+          else if (typeof time === "string") sec = Math.floor(Date.parse(time) / 1000);
+          else if (time && typeof time === "object" && "year" in time) {
+            sec = Math.floor(Date.UTC(time.year, time.month - 1, time.day) / 1000);
+          }
+          if (!sec || isNaN(sec)) return "";
+
+          const date = new Date(sec * 1000);
+          // 0: Year, 1: Month, 2: DayOfMonth, 3: Time, 4: TimeWithSeconds
+          if (tickMarkType === 0) {
+            return date.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric" });
+          }
+          if (tickMarkType === 1) {
+            return date.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short" });
+          }
+          if (tickMarkType === 2) {
+            return date.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" });
+          }
+          return date.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true });
+        },
+      },
+      localization: {
+        timeFormatter: (time: Time) => {
+          let sec = 0;
+          if (typeof time === "number") sec = time;
+          else if (typeof time === "string") sec = Math.floor(Date.parse(time) / 1000);
+          else if (time && typeof time === "object" && "year" in time) {
+            sec = Math.floor(Date.UTC(time.year, time.month - 1, time.day) / 1000);
+          }
+          if (!sec || isNaN(sec)) return "";
+
+          const date = new Date(sec * 1000);
+          if (activeTfRef.current.interval !== "day") {
+            return date.toLocaleString("en-IN", {
+              timeZone: "Asia/Kolkata",
+              day: "2-digit",
+              month: "short",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true,
+            });
+          }
+          return date.toLocaleDateString("en-IN", {
+            timeZone: "Asia/Kolkata",
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+          });
+        },
+      },
+      handleScale: {
+        axisPressedMouseMove: {
+          time: true,
+          price: true,
+        },
+        axisDoubleClickReset: {
+          time: true,
+          price: true,
+        },
+        mouseWheel: true,
+        pinch: true,
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      crosshair: {
+        mode: 1, // Magnet mode to prevent phantom crosshair ticks at x=0
+        vertLine: { color: "#52525b", style: 3, labelBackgroundColor: isLightInitial ? "#1c1917" : "#18181b" },
+        horzLine: { color: "#52525b", style: 3, labelBackgroundColor: isLightInitial ? "#1c1917" : "#18181b" },
+      },
+    });
+
+    candleRef.current = chart.addSeries(CandlestickSeries, {
+      upColor: "#22c55e", // bull
+      downColor: "#ef4444", // bear
+      wickUpColor: "#22c55e",
+      wickDownColor: "#ef4444",
+      borderVisible: false,
+    });
+    upperRef.current = chart.addSeries(LineSeries, {
+      color: isLightInitial ? "rgba(0, 0, 0, 0.25)" : "rgba(255, 255, 255, 0.25)", // accent
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      visible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    lowerRef.current = chart.addSeries(LineSeries, {
+      color: isLightInitial ? "rgba(0, 0, 0, 0.25)" : "rgba(255, 255, 255, 0.25)",
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      visible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    upper90Ref.current = chart.addSeries(LineSeries, {
+      color: isLightInitial ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)",
+      lineWidth: 1,
+      lineStyle: 3,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      visible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    lower10Ref.current = chart.addSeries(LineSeries, {
+      color: isLightInitial ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)",
+      lineWidth: 1,
+      lineStyle: 3,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      visible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    medianRef.current = chart.addSeries(LineSeries, {
+      color: isLightInitial ? "rgba(0, 0, 0, 0.9)" : "rgba(255, 255, 255, 0.9)",
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      visible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    emaRef.current = chart.addSeries(LineSeries, {
+      color: "rgba(250, 204, 21, 0.5)", // muted yellow for visibility
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    vwapRef.current = chart.addSeries(LineSeries, {
+      color: "rgba(59, 130, 246, 0.7)", // blue for VWAP
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    volumeRef.current = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: "volume" },
+      priceScaleId: "vol",
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.7, bottom: 0 } });
+
+    let initialHeight = containerRef.current ? containerRef.current.clientHeight : 0;
+    const resize = new ResizeObserver(([entry]) => {
+      if (entry && chartRef.current) {
+        const w = entry.contentRect.width;
+        const h = entry.contentRect.height;
+        if (w > 0 && h > 0) {
+          chartRef.current.applyOptions({ width: w, height: h });
+          if (initialHeight <= 20 && h > 20) {
+            initialHeight = h;
+            const timeScale = chartRef.current.timeScale();
+            timeScale.fitContent();
+          }
+        }
+      }
+    });
+    resize.observe(containerRef.current);
+    chartRef.current = chart;
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!legendRef.current || !containerRef.current) return;
+      if (
+        param.point === undefined ||
+        !param.time ||
+        param.point.x < 0 ||
+        param.point.x > containerRef.current.clientWidth ||
+        param.point.y < 0 ||
+        param.point.y > containerRef.current.clientHeight ||
+        !candleRef.current
+      ) {
+        legendRef.current.style.display = 'none';
+        return;
+      }
+
+      const data = param.seriesData.get(candleRef.current) as Record<string, number> | undefined;
+      if (!data) {
+        legendRef.current.style.display = 'none';
+        return;
+      }
+
+      const volData = volumeRef.current ? (param.seriesData.get(volumeRef.current) as Record<string, number> | undefined) : null;
+
+      legendRef.current.style.display = 'flex';
+      legendRef.current.innerHTML = `
+        <span class="text-foreground"><span class="text-muted-foreground mr-1">O</span>${fmtNum(data.open)}</span>
+        <span class="text-foreground"><span class="text-muted-foreground mr-1">H</span>${fmtNum(data.high)}</span>
+        <span class="text-foreground"><span class="text-muted-foreground mr-1">L</span>${fmtNum(data.low)}</span>
+        <span class="text-foreground"><span class="text-muted-foreground mr-1">C</span>${fmtNum(data.close)}</span>
+        <span class="text-foreground ml-2"><span class="text-muted-foreground mr-1">Vol</span>${fmtNum(volData ? volData.value : 0)}</span>
+      `;
+    });
+
+    return () => {
+      resize.disconnect();
+      chart.remove();
+      chartRef.current = null;
+    };
+  }, []);
+
+  // Handle dynamic theme changes without remounting the chart
+  useEffect(() => {
+    const clrLine = getComputedStyle(document.documentElement)
+      .getPropertyValue("--primary")
+      .trim();
+      
+    const hexToRgba = (hex: string, alpha: number) => {
+      if (hex.startsWith('#')) {
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+      return hex;
+    };
+
+    if (clrLine && emaRef.current) {
+      emaRef.current.applyOptions({ color: clrLine });
+      vwapRef.current?.applyOptions({ color: "#f59e0b" });
+      lowerRef.current?.applyOptions({ color: hexToRgba(clrLine, 0.25) });
+      upper90Ref.current?.applyOptions({ color: hexToRgba(clrLine, 0.1) });
+      lower10Ref.current?.applyOptions({ color: hexToRgba(clrLine, 0.1) });
+      medianRef.current?.applyOptions({ color: hexToRgba(clrLine, 0.9) });
+    }
+
+    const handleThemeChange = () => {
+      if (!chartRef.current || !emaRef.current) return;
+      const clr = getComputedStyle(document.documentElement)
+        .getPropertyValue("--foreground")
+        .trim();
+      const clrLine = getComputedStyle(document.documentElement)
+        .getPropertyValue("--primary")
+        .trim();
+        
+      const hexToRgba = (hex: string, alpha: number) => {
+        if (hex.startsWith('#')) {
+          const r = parseInt(hex.slice(1, 3), 16);
+          const g = parseInt(hex.slice(3, 5), 16);
+          const b = parseInt(hex.slice(5, 7), 16);
+          return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+        return hex;
+      };
+
+      chartRef.current.applyOptions({
+        layout: { textColor: clr || "#a3a3a3" },
+        grid: {
+          vertLines: { color: clr ? `${clr}08` : "rgba(255, 255, 255, 0.04)" },
+          horzLines: { color: clr ? `${clr}08` : "rgba(255, 255, 255, 0.04)" },
+        },
+      });
+      emaRef.current.applyOptions({ color: clrLine });
+      vwapRef.current?.applyOptions({ color: "#f59e0b" });
+      lowerRef.current?.applyOptions({ color: hexToRgba(clrLine, 0.25) });
+      upper90Ref.current?.applyOptions({ color: hexToRgba(clrLine, 0.1) });
+      lower10Ref.current?.applyOptions({ color: hexToRgba(clrLine, 0.1) });
+      medianRef.current?.applyOptions({ color: hexToRgba(clrLine, 0.9) });
+    };
+
+    window.addEventListener("themechange", handleThemeChange);
+    return () => {
+      window.removeEventListener("themechange", handleThemeChange);
+    };
+  }, []);
+
+  // 0. Immediate Cleanup on Symbol or Chart Mode Change
+  useEffect(() => {
+    if (lastFitKey.current !== currentChartKey) {
+      if (candleRef.current) candleRef.current.setData([]);
+      if (volumeRef.current) volumeRef.current.setData([]);
+      if (emaRef.current) emaRef.current.setData([]);
+      if (vwapRef.current) vwapRef.current.setData([]);
+      if (medianRef.current) medianRef.current.setData([]);
+      if (upperRef.current) upperRef.current.setData([]);
+      if (lowerRef.current) lowerRef.current.setData([]);
+      if (upper90Ref.current) upper90Ref.current.setData([]);
+      if (lower10Ref.current) lower10Ref.current.setData([]);
+      liveBarRef.current = null;
+      // Clear price line refs so stale lines from previous symbol aren't leaked (#10)
+      entryLineRef.current = null;
+      stopLineRef.current = null;
+      targetLineRef.current = null;
+      posEntryLineRef.current = null;
+      posStopLineRef.current = null;
+      posTargetLineRef.current = null;
+      aiTargetLineRef.current = null;
+    }
+  }, [currentChartKey]);
+
+  // 1. Candles Effect - Only runs when actual historical data changes
+  useEffect(() => {
+    if (!candleRef.current || !emaRef.current || !vwapRef.current || !volumeRef.current) return;
+
+    const uniqueLiveCandles = candles.map(c => ({
+      ...c,
+      parsedTime: Math.floor(Date.parse(c.ts) / 1000) as Time,
+    }));
+    
+    const lastTime = uniqueLiveCandles.length > 0 ? (uniqueLiveCandles[uniqueLiveCandles.length - 1].parsedTime as number) : 0;
+    
+    // Only reset liveBar if the latest candle from API has caught up or surpassed it
+    if (liveBarRef.current && (liveBarRef.current.time as number) <= lastTime) {
+      liveBarRef.current = null;
+    }
+
+    const formatted = uniqueLiveCandles.map((c) => {
+      const open = Number.isFinite(c.open) ? c.open : Number.isFinite(c.close) ? c.close : 0;
+      const close = Number.isFinite(c.close) ? c.close : 0;
+      const rawHigh = Number.isFinite(c.high) ? c.high : close;
+      const rawLow = Number.isFinite(c.low) ? c.low : close;
+      return {
+        time: c.parsedTime,
+        open,
+        close,
+        high: Math.max(open, close, rawHigh, rawLow),
+        low: Math.min(open, close, rawHigh, rawLow),
+        volume: c.volume ?? 0,
+      };
+    });
+    
+    // If we have an active live bar that is newer than API data, preserve it in the chart!
+    if (liveBarRef.current && (liveBarRef.current.time as number) > lastTime) {
+      formatted.push(liveBarRef.current);
+    }
+
+    const closes = formatted.map((c) => ({
+      time: c.time,
+      value: c.close,
+    }));
+
+    const volumes = formatted.map((c) => ({
+      time: c.time,
+      value: Number.isFinite(c.volume) ? c.volume! : 0,
+      color: c.close >= c.open ? "rgba(0, 230, 118, 0.3)" : "rgba(255, 23, 68, 0.3)",
+    }));
+
+    // Set candle data instantly without any animation delay
+    const loadedChartKey = `${symbol}-${activeTf.label}-${chartMode}`;
+
+    candleRef.current.setData(formatted);
+
+    if (emaRef.current) {
+      emaRef.current.setData(calcEma(closes, 20));
+    }
+
+    if (uniqueLiveCandles.length > 0 && vwapRef.current) {
+      const vwapInput = liveBarRef.current && (liveBarRef.current.time as number) > lastTime
+        ? [...uniqueLiveCandles, {
+            ts: new Date((liveBarRef.current.time as number) * 1000).toISOString(),
+            open: liveBarRef.current.open,
+            high: liveBarRef.current.high,
+            low: liveBarRef.current.low,
+            close: liveBarRef.current.close,
+            volume: liveBarRef.current.volume,
+            vwapTurnover: liveBarRef.current.vwapTurnover
+          }]
+        : uniqueLiveCandles;
+      vwapRef.current.setData(calcVwap(vwapInput));
+    }
+
+    if (volumeRef.current) {
+      volumeRef.current.setData(volumes);
+    }
+
+    const containerReady = (containerRef.current?.clientHeight ?? 0) > 20;
+    if (lastFitKey.current !== loadedChartKey && loadedChartKey === currentChartKey && formatted.length > 0 && containerReady) {
+      const timeScale = chartRef.current?.timeScale();
+      if (timeScale) {
+        const totalBars = formatted.length;
+        const visibleBars = Math.min(totalBars, 150);
+        timeScale.setVisibleLogicalRange({
+          from: Math.max(0, totalBars - visibleBars),
+          to: totalBars + 2,
+        });
+      }
+      lastFitKey.current = currentChartKey;
+    }
+  }, [candles, chartMode, symbol, activeTf.label, currentChartKey]);
+
+  // 2. Forecast & Projection Effect
+  useEffect(() => {
+    if (!medianRef.current || !upperRef.current || !lowerRef.current || !upper90Ref.current || !lower10Ref.current) return;
+    
+    if (forecast && forecast.symbol && forecast.symbol !== symbol) {
+      medianRef.current.setData([]);
+      upperRef.current.setData([]);
+      lowerRef.current.setData([]);
+      upper90Ref.current.setData([]);
+      lower10Ref.current.setData([]);
+      return;
+    }
+
+    const projection = buildForecastProjection(candles, forecast);
+    const showProj = chartMode === "forecast" && projection.median.length > 0;
+    
+    if (showProj) {
+      medianRef.current.setData(projection.median);
+      upperRef.current.setData(projection.upper);
+      lowerRef.current.setData(projection.lower);
+      upper90Ref.current.setData(projection.upper90);
+      lower10Ref.current.setData(projection.lower10);
+    } else {
+      medianRef.current.setData([]);
+      upperRef.current.setData([]);
+      lowerRef.current.setData([]);
+      upper90Ref.current.setData([]);
+      lower10Ref.current.setData([]);
+    }
+  }, [candles, forecast, chartMode, symbol]);
+
+  // 3. Price Lines Effect (Suggestion, Position, AI Target)
+  useEffect(() => {
+    if (!candleRef.current) return;
+
+    // Clean up all existing price lines
+    if (entryLineRef.current) candleRef.current.removePriceLine(entryLineRef.current);
+    if (stopLineRef.current) candleRef.current.removePriceLine(stopLineRef.current);
+    if (targetLineRef.current) candleRef.current.removePriceLine(targetLineRef.current);
+    if (posEntryLineRef.current) candleRef.current.removePriceLine(posEntryLineRef.current);
+    if (posStopLineRef.current) candleRef.current.removePriceLine(posStopLineRef.current);
+    if (posTargetLineRef.current) candleRef.current.removePriceLine(posTargetLineRef.current);
+    if (aiTargetLineRef.current) candleRef.current.removePriceLine(aiTargetLineRef.current);
+    
+    entryLineRef.current = null;
+    stopLineRef.current = null;
+    targetLineRef.current = null;
+    posEntryLineRef.current = null;
+    posStopLineRef.current = null;
+    posTargetLineRef.current = null;
+    aiTargetLineRef.current = null;
+
+    if (!candles.length) return;
+
+    // Compute the visible candle price range so we can skip outlier price lines
+    // that would distort the Y-axis auto-scale (e.g. suggestion target at 10.83 while candles at 845)
+    let candleMin = Infinity;
+    let candleMax = -Infinity;
+    for (const c of candles) {
+      if (c.low < candleMin) candleMin = c.low;
+      if (c.high > candleMax) candleMax = c.high;
+    }
+    const lastClose = candles[candles.length - 1]?.close || 0;
+    const isInRange = (price: number) => {
+      if (!Number.isFinite(price) || price <= 0) return false;
+      const buffer = (candleMax - candleMin) * 2;
+      return price >= candleMin - buffer && price <= candleMax + buffer;
+    };
+
+    const isMatchingSymbol = (targetSym?: string) => {
+      if (!targetSym || !symbol) return false;
+      const normTarget = targetSym.replace(/^NSE:|^BSE:|\.NS$|\.BO$/i, '').toUpperCase();
+      const normCurrent = symbol.replace(/^NSE:|^BSE:|\.NS$|\.BO$/i, '').toUpperCase();
+      return normTarget === normCurrent;
+    };
+
+    if (suggestion && isMatchingSymbol(suggestion.symbol)) {
+      if (isInRange(suggestion.entryPrice)) {
+        entryLineRef.current = candleRef.current.createPriceLine({
+          price: suggestion.entryPrice,
+          color: '#00e676',
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: `ENTRY (₹${suggestion.entryPrice})`,
+        });
+      }
+      if (isInRange(suggestion.stopLoss)) {
+        stopLineRef.current = candleRef.current.createPriceLine({
+          price: suggestion.stopLoss,
+          color: '#ff6b00',
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: `STOP (₹${suggestion.stopLoss})`,
+        });
+      }
+      if (isInRange(suggestion.target1)) {
+        targetLineRef.current = candleRef.current.createPriceLine({
+          price: suggestion.target1,
+          color: '#00f2fe',
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: `TARGET (₹${suggestion.target1})`,
+        });
+      }
+    }
+
+    if (position && isMatchingSymbol(position.symbol)) {
+      const posEntry = Number(position.avgEntryPrice || 0);
+      const posSL = Number(position.trailingStopLoss || 0);
+      const posTgt = position.direction === 'BUY' ? posEntry * 1.05 : posEntry * 0.95;
+
+      if (isInRange(posEntry)) {
+        posEntryLineRef.current = candleRef.current.createPriceLine({
+          price: posEntry,
+          color: position.direction === 'BUY' ? '#00e676' : '#ff1744',
+          lineWidth: 2,
+          lineStyle: 0,
+          axisLabelVisible: true,
+          title: `ENTRY (${position.direction} ₹${fmtNum(posEntry, 2)})`,
+        });
+      }
+      if (isInRange(posSL)) {
+        posStopLineRef.current = candleRef.current.createPriceLine({
+          price: posSL,
+          color: '#ff6b00',
+          lineWidth: 2,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: `SL (₹${fmtNum(posSL, 2)})`,
+        });
+      }
+      if (isInRange(posTgt)) {
+        posTargetLineRef.current = candleRef.current.createPriceLine({
+          price: posTgt,
+          color: '#00f2fe',
+          lineWidth: 2,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: `TGT (₹${fmtNum(posTgt, 2)})`,
+        });
+      }
+    }
+
+    const liveData = marketDataStore.get(symbol);
+    const basePrice = liveData?.ltp || (forecast && isMatchingSymbol(forecast.symbol) ? forecast.lastClose : null) || lastClose;
+    if (forecast && isMatchingSymbol(forecast.symbol) && forecast.forecastReturnPct !== undefined && chartMode === "forecast") {
+      const targetPrice = basePrice * (1 + (forecast.forecastReturnPct || 0) / 100);
+      const fReturn = forecast.forecastReturnPct || 0;
+
+      if (isInRange(targetPrice)) {
+        aiTargetLineRef.current = candleRef.current.createPriceLine({
+          price: targetPrice,
+          color: fReturn > 0 ? 'rgba(34, 197, 94, 0.8)' : fReturn < 0 ? 'rgba(239, 68, 68, 0.8)' : 'rgba(163, 163, 163, 0.8)',
+          lineWidth: 2,
+          lineStyle: 1, // Solid line to distinguish from dashed current price line
+          axisLabelVisible: true,
+          title: `AI TGT (${fmtPct(fReturn, 1)})${forecastIsFallback ? " · HEURISTIC" : ""}`,
+        });
+      }
+    }
+  }, [candles, suggestion, position, forecast, forecastIsFallback, symbol, chartMode]);
+
+  // 4. Visibility & Chart Options Effect
+  useEffect(() => {
+    if (!emaRef.current || !vwapRef.current || !medianRef.current || !upperRef.current || !lowerRef.current || !upper90Ref.current || !lower10Ref.current) return;
+
+    // Color median based on trend
+    if (forecast?.trend === "bullish") {
+      medianRef.current.applyOptions({ color: "#22c55e" });
+    } else if (forecast?.trend === "bearish") {
+      medianRef.current.applyOptions({ color: "#ef4444" });
+    } else {
+      medianRef.current.applyOptions({ color: "rgba(255, 255, 255, 0.9)" });
+    }
+
+    const showProj = chartMode === "forecast" && forecast?.available;
+
+    emaRef.current.applyOptions({ visible: showEma && chartMode === "actual" });
+    vwapRef.current.applyOptions({ visible: showVwap && chartMode === "actual" });
+    medianRef.current.applyOptions({ visible: Boolean(showProj) });
+    upperRef.current.applyOptions({ visible: Boolean(showProj) });
+    lowerRef.current.applyOptions({ visible: Boolean(showProj) });
+    upper90Ref.current.applyOptions({ visible: Boolean(showProj) });
+    lower10Ref.current.applyOptions({ visible: Boolean(showProj) });
+    
+    // Adjust boundaries dynamically based on mode
+    chartRef.current?.timeScale().applyOptions({
+      fixRightEdge: chartMode === "actual",
+      rightOffset: chartMode === "actual" ? 0 : 20,
+    });
+  }, [showEma, showVwap, chartMode, forecast]);
+
+  useEffect(() => {
+    if (!symbol) return;
+    let prevLtp: number | null = null;
+    // Tick feed's `volume` is the cumulative DAILY total — track the per-bar delta
+    // (cumulative at bar open vs now), never write the day total into an intraday bar.
+    let barVolBase: number | null = null;
+    let barVolTime: number | null = null;
+    let lastCumVol: number | null = null;
+
+    const unsub = marketDataStore.subscribe(symbol, () => {
+      const curCandles = candlesRef.current;
+      if (curCandles.length === 0) return;
+      const data = marketDataStore.get(symbol);
+      const tickLtp = data?.ltp;
+      if (!candleRef.current || !volumeRef.current || !tickLtp || tickLtp <= 0 || !Number.isFinite(tickLtp) || tickLtp === prevLtp) return;
+
+      const lastCandle = curCandles[curCandles.length - 1];
+      if (!lastCandle || lastCandle.close <= 0) return;
+
+      const lastCandleSec = Math.floor(Date.parse(lastCandle.ts) / 1000);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const interval = activeTfRef.current.interval;
+      const intervalSec = interval === "1minute" ? 60 : interval === "15minute" ? 900 : interval === "60minute" ? 3600 : 86400;
+
+      // #1: Align precisely to NSE market hours to prevent weekend gap bucket shifting
+      const nseBucket = getNSECandleStart(nowSec, interval);
+      const targetTime = Math.max(nseBucket, lastCandleSec); // Prevent going backwards
+      const time = targetTime as Time;
+      const isOpenNewBar = targetTime > lastCandleSec;
+      const isSessionGap = (targetTime - (liveBarRef.current ? (liveBarRef.current.time as number) : lastCandleSec)) > 5 * 3600;
+
+      // Ignore bad exchange ticks/spikes (dynamic threshold based on ATR), but permit new session gaps
+      if (!isSessionGap) {
+        const refClose = liveBarRef.current?.close ?? lastCandle.close;
+        const spikeThreshold = Math.max(atrRef.current * 5, refClose * 0.03); // 5x ATR or 3%
+        if (Math.abs(tickLtp - refClose) > spikeThreshold) return;
+      }
+      prevLtp = tickLtp;
+
+      // Volume tracking
+      const cumVol = Number.isFinite(data.volume) ? (data.volume as number) : null;
+      let tickVolDelta = 0;
+
+      if (cumVol != null) {
+        if (lastCumVol != null && cumVol >= lastCumVol) {
+          tickVolDelta = cumVol - lastCumVol;
+        } else if (lastCumVol == null) {
+          tickVolDelta = 1; // Fallback for first tick
+        }
+
+        // Reset the base at each new bar (or when the daily counter resets on a new session)
+        if (barVolTime !== targetTime || (lastCumVol != null && cumVol < lastCumVol)) {
+          barVolTime = targetTime;
+          // #3: Snapshot base to previous tick's volume, so this tick's delta is assigned to the new bar
+          barVolBase = isOpenNewBar ? (lastCumVol ?? cumVol) : Math.max(0, cumVol - lastCandle.volume);
+        }
+        lastCumVol = cumVol;
+      }
+
+      const barVol = interval === "day"
+        ? (isOpenNewBar ? (cumVol || 1) : Math.max(lastCandle.volume, cumVol || 0))
+        : cumVol != null && barVolBase != null
+          ? Math.max(cumVol - barVolBase, 1)
+          : (isOpenNewBar ? 1 : lastCandle.volume);
+
+      if (!liveBarRef.current || liveBarRef.current.time !== time) {
+        // Flush previous live bar and fill any skipped empty buckets so no gap appears
+        const prev = liveBarRef.current;
+        if (prev && (prev.time as number) < targetTime) {
+          candleRef.current.update({ ...prev });
+          // Fill small intra-session gaps only; big jumps (overnight/weekend) left to the 60s refetch
+          const missed = (targetTime - (prev.time as number)) / intervalSec - 1;
+          if (missed > 0 && missed <= 10) {
+            for (let t = (prev.time as number) + intervalSec; t < targetTime; t += intervalSec) {
+              candleRef.current.update({ time: t as Time, open: prev.close, high: prev.close, low: prev.close, close: prev.close });
+            }
+          }
+        }
+        // Across an overnight/session gap, open at the tick's price (tickLtp).
+        // Intra-session, connect to previous bar's close for seamless candles.
+        const prevClose = prev ? prev.close : lastCandle.close;
+        const barOpen = (isOpenNewBar && !isSessionGap) ? prevClose : tickLtp;
+        liveBarRef.current = {
+          time,
+          open: barOpen,
+          high: Math.max(barOpen, tickLtp),
+          low: Math.min(barOpen, tickLtp),
+          close: tickLtp,
+          volume: barVol,
+          vwapTurnover: tickLtp * tickVolDelta // #4: precision VWAP tick accumulator
+        };
+      } else {
+        liveBarRef.current.high = Math.max(liveBarRef.current.high, tickLtp);
+        liveBarRef.current.low = Math.min(liveBarRef.current.low, tickLtp);
+        liveBarRef.current.close = tickLtp;
+        liveBarRef.current.volume = barVol;
+        liveBarRef.current.vwapTurnover += tickLtp * tickVolDelta;
+      }
+      
+      candleRef.current.update({
+        time: liveBarRef.current.time,
+        open: liveBarRef.current.open,
+        high: liveBarRef.current.high,
+        low: liveBarRef.current.low,
+        close: liveBarRef.current.close,
+      });
+
+      volumeRef.current.update({
+        time: liveBarRef.current.time,
+        value: barVol,
+        color: tickLtp >= liveBarRef.current.open ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)",
+      });
+
+    });
+
+    return () => {
+      unsub();
+    };
+  }, [symbol, activeTf.interval]);
+
+  const projMeta = chartMode === "forecast" && forecast;
+
+  return (
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden border-0 bg-transparent">
+      <CardHeader className="flex shrink-0 flex-col sm:flex-row items-start sm:items-center justify-between gap-2 p-3 pb-1">
+        <div className="flex min-w-0 items-center gap-3">
+          {projMeta && (
+            <span className="text-xs font-normal text-foreground/70">
+              {forecast!.trend}{" "}
+              <strong className={`font-mono tabular-nums ${(forecast!.forecastReturnPct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                {fmtPct(forecast!.forecastReturnPct ?? null)}
+              </strong>
+            </span>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-4 w-full sm:w-auto justify-between sm:justify-end overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
+          {chartMode === "actual" && (
+            <div className="flex items-center gap-3 text-xs font-semibold tracking-[0.1em] text-foreground/70 font-mono">
+            <div className="flex bg-foreground/5 rounded-full p-0.5 items-center gap-1">
+              {TIMEFRAMES.map((tf) => (
+                <button
+                  key={tf.label}
+                  type="button"
+                  onClick={() => setTimeframe(tf)}
+                  style={{ padding: "2px 8px" }}
+                  className={cn(
+                    "relative text-[8px] font-mono font-semibold tracking-widest whitespace-nowrap shrink-0 rounded-full transition-colors",
+                    timeframe.label === tf.label
+                      ? "!text-black"
+                      : "text-foreground/50 hover:text-foreground hover:bg-foreground/5"
+                  )}
+                >
+                  {timeframe.label === tf.label && (
+                    <motion.div
+                      layoutId={`timeframe-indicator-${symbol}`}
+                      className="absolute inset-0 bg-white rounded-full shadow-sm"
+                      style={{ borderRadius: 9999 }}
+                      transition={{ type: "spring", bounce: 0.15, duration: 0.5 }}
+                    />
+                  )}
+                  <span className="relative z-10">{tf.label}</span>
+                </button>
+              ))}
+            </div>
+              <div className="mx-2 h-4 w-[1px] bg-border/20" />
+              <button
+                type="button"
+                onClick={() => setShowEma(!showEma)}
+                className={cn(
+                  "transition-colors duration-150 pb-0.5 border-b-2 text-[8px]",
+                  showEma
+                    ? "text-yellow-400/80 border-yellow-400/50"
+                    : "text-foreground/30 border-transparent hover:text-yellow-400/50"
+                )}
+              >
+                <span className="relative z-10">EMA</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowVwap(!showVwap)}
+                className={cn(
+                  "transition-colors duration-150 pb-0.5 border-b-2 text-[8px]",
+                  showVwap
+                    ? "text-blue-400/80 border-blue-400/50"
+                    : "text-foreground/30 border-transparent hover:text-blue-400/50"
+                )}
+              >
+                <span className="relative z-10">VWAP</span>
+              </button>
+            </div>
+          )}
+        <div className="flex items-center gap-3 text-xs font-semibold tracking-[0.1em] text-foreground/70 pl-3 font-mono">
+          <div className="flex bg-foreground/5 rounded-full p-0.5 items-center gap-1">
+            <button
+              type="button"
+              onClick={() => onChartModeChange("actual")}
+              style={{ padding: "2px 8px" }}
+              className={cn(
+                "relative text-[8px] font-mono font-semibold tracking-widest whitespace-nowrap shrink-0 rounded-full transition-colors",
+                chartMode === "actual"
+                  ? "!text-black"
+                  : "text-foreground/50 hover:text-foreground hover:bg-foreground/5"
+              )}
+            >
+              {chartMode === "actual" && (
+                <motion.div
+                  layoutId={`chartmode-indicator-${symbol}`}
+                  className="absolute inset-0 bg-white rounded-full shadow-sm"
+                  style={{ borderRadius: 9999 }}
+                  transition={{ type: "spring", bounce: 0.15, duration: 0.5 }}
+                />
+              )}
+              <span className="relative z-10">Price</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onChartModeChange("forecast")}
+              disabled={!forecast}
+              style={{ padding: "2px 8px" }}
+              className={cn(
+                "relative text-[8px] font-mono font-semibold tracking-widest whitespace-nowrap shrink-0 rounded-full transition-colors",
+                chartMode === "forecast"
+                  ? "!text-black"
+                  : "text-foreground/50 hover:text-foreground hover:bg-foreground/5",
+                !forecast && "opacity-30 cursor-not-allowed"
+              )}
+            >
+              {chartMode === "forecast" && (
+                <motion.div
+                  layoutId={`chartmode-indicator-${symbol}`}
+                  className="absolute inset-0 bg-white rounded-full shadow-sm"
+                  style={{ borderRadius: 9999 }}
+                  transition={{ type: "spring", bounce: 0.15, duration: 0.5 }}
+                />
+              )}
+              <span className="relative z-10">Projection</span>
+            </button>
+          </div>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="relative min-h-[300px] flex-1 p-0 overflow-hidden">
+        <div 
+          ref={containerRef} 
+          className={cn("absolute inset-0 h-full w-full transition-opacity duration-300", loading ? "opacity-20" : "opacity-100")}
+        />
+        
+        {!loading && (
+          <div 
+            ref={legendRef}
+            style={{ display: 'none' }}
+            className="absolute top-2 left-2 z-10 flex-wrap gap-2 text-[10px] sm:text-xs font-mono font-normal text-foreground/70 pointer-events-none [text-shadow:0_0_6px_var(--background),0_0_2px_var(--background)]"
+          />
+        )}
+
+        {chartMode === "forecast" && forecast?.medianForecast && !loading && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="absolute bottom-6 left-6 z-10 flex flex-col gap-1.5 text-xs font-mono bg-background/90 backdrop-blur-md px-3 py-2 border border-border/20 rounded shadow-lg pointer-events-none min-w-[160px]"
+          >
+            <div className="font-normal border-b border-border/20 pb-1 mb-1 text-foreground/90 uppercase tracking-[0.08em] text-[10px]">
+              Chronos Projection
+              {forecastIsFallback && <span className="text-yellow-500"> · Heuristic</span>}
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Est Return</span>
+              <span className={cn("font-normal", (forecast.forecastReturnPct ?? 0) > 0 ? "text-bull" : (forecast.forecastReturnPct ?? 0) < 0 ? "text-bear" : "text-foreground")}>
+                {forecast.forecastReturnPct != null ? fmtPct(forecast.forecastReturnPct) : "N/A"}
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Trend</span>
+              <span className={cn("font-normal uppercase", forecast.trend === 'UP' ? "text-bull" : forecast.trend === 'DOWN' ? "text-bear" : "text-foreground")}>
+                {forecast.trend || "NEUTRAL"}
+              </span>
+            </div>
+          </motion.div>
+        )}
+
+
+        {!loading && candles.length === 0 && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center z-10 p-6 text-center gap-3 bg-background/80 backdrop-blur-md">
+            <div className="w-12 h-12 rounded-2xl bg-secondary/30 flex items-center justify-center text-foreground/70">
+              <svg className="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-normal tracking-tight text-foreground">
+                {isAuthenticated === false ? "Chart Data Locked" : `No Historical Bars for ${symbol}`}
+              </h3>
+              <p className="text-xs text-muted-foreground max-w-[280px] mx-auto leading-relaxed">
+                {isAuthenticated === false 
+                  ? "Please authorize your brokerage account to stream real-time candle data."
+                  : "Database history is clean or currently awaiting market open for this ticker."}
+              </p>
+            </div>
+            {isAuthenticated !== false && error && (
+              <span className="text-destructive/80 text-[11px] font-mono mt-1">{error}</span>
+            )}
+          </div>
+        )}
+
+        {!loading && candles.length > 0 && isAuthenticated === false && (
+          <div className="pointer-events-none absolute top-2 right-2 z-10 px-2 py-1 bg-destructive/10 border border-destructive/20 rounded text-[10px] font-normal text-destructive backdrop-blur-md">
+            Upstox Auth Required for Live Updates
+          </div>
+        )}
+        
+        {!loading && candles.length > 0 && error && isAuthenticated !== false && (
+          <div className="pointer-events-none absolute top-2 right-2 z-10 px-2 py-1 bg-destructive/10 border border-destructive/20 rounded text-[10px] font-normal text-destructive backdrop-blur-md">
+            Live Feed Disconnected
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+});
+
+function calcEma(data: { time: Time; value: number }[], period: number) {
+  if (!data.length) return [];
+  const k = 2 / (period + 1);
+  let value = data[0]!.value;
+  return data.map((point, index) => {
+    value = index === 0 ? value : point.value * k + value * (1 - k);
+    return { time: point.time, value };
+  });
+}
+
+function calcVwap(candles: (Candle & { parsedTime?: Time; vwapTurnover?: number })[]) {
+  let cumVol = 0;
+  let cumVolPrice = 0;
+  let prevDay = -1;
+  return candles.map((c) => {
+    // Session VWAP resets on the IST trading day, not the viewer's local day.
+    // 19800000 ms = +05:30; IST has no DST so a fixed offset is safe.
+    const epochMs = c.parsedTime != null ? (c.parsedTime as number) * 1000 : Date.parse(c.ts);
+    const d = new Date(epochMs + 19800000);
+    const day = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+    if (day !== prevDay) {
+      cumVol = 0;
+      cumVolPrice = 0;
+      prevDay = day;
+    }
+    const safeHigh = Number.isFinite(c.high) ? c.high : c.close || 0;
+    const safeLow = Number.isFinite(c.low) ? c.low : c.close || 0;
+    const safeClose = Number.isFinite(c.close) ? c.close : 0;
+    const safeVol = Number.isFinite(c.volume) ? c.volume : 0;
+    
+    cumVol += safeVol;
+    if (c.vwapTurnover != null && c.vwapTurnover > 0) {
+      cumVolPrice += c.vwapTurnover;
+    } else {
+      const typical = (safeHigh + safeLow + safeClose) / 3;
+      cumVolPrice += typical * safeVol;
+    }
+    
+    const vwap = cumVol === 0 ? safeClose : cumVolPrice / cumVol;
+    const timeSec = c.parsedTime ?? Math.floor(epochMs / 1000) as Time;
+    return { time: timeSec, value: vwap };
+  });
+}
+
+function buildForecastProjection(candles: Candle[], forecast: SymbolForecast | null) {
+  const empty = { 
+    median: [] as Array<{ time: Time; value: number }>, 
+    upper: [] as Array<{ time: Time; value: number }>, 
+    lower: [] as Array<{ time: Time; value: number }>,
+    upper90: [] as Array<{ time: Time; value: number }>,
+    lower10: [] as Array<{ time: Time; value: number }>
+  };
+  if (!candles.length || !forecast?.medianForecast?.length) return empty;
+
+  const last = candles[candles.length - 1]!;
+  const lastTime = Math.floor(Date.parse(last.ts) / 1000);
+  const q = forecast.quantileForecasts;
+  const anchor = { time: lastTime as Time, value: last.close };
+
+  // Strict clamp bounds so statistical fan-out never goes below zero or creates chart-destroying outliers (-200 or 10.83 on an 845 stock)
+  const minBound = Math.max(0.1, last.close * 0.35);
+  const maxBound = last.close * 2.8;
+  const clampVal = (v: number) => Math.max(minBound, Math.min(maxBound, Number.isFinite(v) ? v : last.close));
+
+  // Helper to add business days
+  const getFutureTime = (startDate: Date, days: number) => {
+    const result = new Date(startDate);
+    let added = 0;
+    while (added < days) {
+      result.setDate(result.getDate() + 1);
+      const day = result.getDay();
+      if (day !== 0 && day !== 6) added++; // Skip Sunday(0) and Saturday(6)
+    }
+    return Math.floor(result.getTime() / 1000) as Time;
+  };
+
+  const lastDate = new Date(last.ts);
+
+  const median = forecast.medianForecast.map((value, i) => ({ time: getFutureTime(lastDate, i + 1), value: clampVal(value) }));
+  const upper = forecast.medianForecast.map((_, i) => ({ time: getFutureTime(lastDate, i + 1), value: clampVal(q?.q75?.[i] ?? forecast.medianForecast![i]!) }));
+  const lower = forecast.medianForecast.map((_, i) => ({ time: getFutureTime(lastDate, i + 1), value: clampVal(q?.q25?.[i] ?? forecast.medianForecast![i]!) }));
+  const upper90 = forecast.medianForecast.map((_, i) => ({ time: getFutureTime(lastDate, i + 1), value: clampVal(q?.q90?.[i] ?? q?.q75?.[i] ?? forecast.medianForecast![i]!) }));
+  const lower10 = forecast.medianForecast.map((_, i) => ({ time: getFutureTime(lastDate, i + 1), value: clampVal(q?.q10?.[i] ?? q?.q25?.[i] ?? forecast.medianForecast![i]!) }));
+
+  return { 
+    median: [anchor, ...median], 
+    upper: [anchor, ...upper], 
+    lower: [anchor, ...lower],
+    upper90: [anchor, ...upper90],
+    lower10: [anchor, ...lower10]
+  };
+}
+
+
+
+

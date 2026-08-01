@@ -1,0 +1,14 @@
+node_modules/
+out/
+release/
+dist/
+.probe/
+*.log
+.DS_Store
+.portable/
+
+venv/
+.venv/
+__pycache__/
+backend/data/
+backend/ai_service/venv/

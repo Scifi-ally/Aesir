@@ -1,0 +1,361 @@
+import { useEffect, useState } from 'react';
+import { X, Copy, Check } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { cn, fmtNum } from "@/modules/mimir/lib/format";
+import { useQuery } from '@tanstack/react-query';
+import { api } from "@/modules/mimir/lib/api";
+import { FADE_STANDARD, SPRING_GENTLE } from "@/modules/mimir/lib/motion";
+import { Skeleton } from "@/modules/mimir/components/atoms/Skeleton";
+
+
+
+function formatSuggestionText(s: import("@/modules/mimir/types/api").Suggestion): string {
+  return `${s.direction} ${s.symbol} @ ₹${fmtNum(s.entryPrice)} | TG: ₹${fmtNum(s.target1)} | SL: ₹${fmtNum(s.stopLoss)}`;
+}
+
+function CopyButton({ text, tooltip, className }: { text: string; tooltip?: string, className?: string }) {
+  const [copied, setCopied] = useState(false);
+  
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  
+  return (
+    <button
+      onClick={handleCopy}
+      title={tooltip || "Copy"}
+      className={cn("p-1.5 rounded-full bg-secondary/50 hover:bg-secondary text-muted-foreground hover:text-foreground transition-all pointer-events-auto active:scale-95", className)}
+    >
+      {copied ? <Check className="w-3.5 h-3.5 text-bull" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  );
+}
+
+export function SuggestionsSlider({ isOpen, onClose, onSelectSymbol, activeSuggestions }: { isOpen: boolean; onClose: () => void; onSelectSymbol?: (symbol: string) => void; activeSuggestions?: import("@/modules/mimir/types/api").Suggestion[] }) {
+
+  const { data: suggestionsData, isPending, error } = useQuery({
+    queryKey: ['suggestions', 'history'],
+    queryFn: () => api.historySuggestions(),
+    refetchInterval: isOpen ? 30000 : false, // closed history changes rarely
+    staleTime: 0,
+    enabled: isOpen,
+  });
+
+  const { data: accuracy } = useQuery({
+    queryKey: ['suggestions', 'accuracy'],
+    queryFn: () => api.suggestionsAccuracy(),
+    staleTime: 5 * 60_000,
+    enabled: isOpen,
+  });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
+
+  const historySuggestions = suggestionsData?.data || [];
+  
+  const allSuggestions = new Map<string, import("@/modules/mimir/types/api").Suggestion>();
+  
+  // Add history first
+  (historySuggestions || []).forEach((s: import("@/modules/mimir/types/api").Suggestion) => {
+    if (s.status !== 'REJECTED') {
+      allSuggestions.set(s.id, s);
+    }
+  });
+
+  // Override with active (which are more up-to-date)
+  (activeSuggestions || []).forEach((s: import("@/modules/mimir/types/api").Suggestion) => {
+    if (s.status !== 'REJECTED') {
+      allSuggestions.set(s.id, s);
+    }
+  });
+
+  const mergedList = Array.from(allSuggestions.values())
+    .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
+
+  const groupedSuggestions = mergedList.reduce((acc, s) => {
+      const d = new Date(s.generatedAt);
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(today.getDate() - 1);
+      
+      let key = d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+      if (d.toDateString() === today.toDateString()) key = "Today";
+      else if (d.toDateString() === yesterday.toDateString()) key = "Yesterday";
+      
+      const lastGroup = acc[acc.length - 1];
+      if (lastGroup && lastGroup.title === key) {
+        lastGroup.items.push(s);
+      } else {
+        acc.push({ title: key, items: [s] });
+      }
+      return acc;
+    }, [] as { title: string, items: import("@/modules/mimir/types/api").Suggestion[] }[]);
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          {/* Backdrop */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={FADE_STANDARD}
+            className="fixed inset-0 z-[60] bg-background/70 backdrop-blur-sm"
+            onClick={onClose}
+          />
+
+          {/* Modal Panel */}
+          <motion.div
+            initial={{ y: "100%", x: "-50%" }}
+            animate={{ y: 0, x: "-50%" }}
+            exit={{ y: "100%", x: "-50%" }}
+            transition={SPRING_GENTLE}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Active signals"
+            className="fixed left-1/2 bottom-0 z-[70] flex flex-col bg-background text-foreground overflow-hidden h-[86vh] w-full max-w-4xl rounded-t-3xl shadow-[0_-8px_40px_rgba(0,0,0,0.4)] ring-0 outline-none"
+          >
+            {/* Header */}
+            <div className="relative px-8 pr-12 pt-6 pb-4 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
+              <h2 className="text-[10px] font-mono font-normal tracking-[0.15em] uppercase text-muted-foreground/80">
+                Active Signals
+              </h2>
+
+              <button
+                onClick={onClose}
+                aria-label="Close signals"
+                className="absolute right-6 top-6 z-10 p-2 rounded-full hover:bg-foreground/[0.06] text-muted-foreground/60 hover:text-foreground transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60"
+              >
+                <X className="w-4.5 h-4.5" />
+              </button>
+            </div>
+
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto p-8 flex flex-col gap-10">
+              {isPending ? (
+                <div className="flex flex-col gap-4 pt-2">
+                  <Skeleton className="h-3 w-28" />
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="flex flex-col gap-3 rounded-2xl border border-border/10 p-5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Skeleton className="h-5 w-24" />
+                          <Skeleton className="h-4 w-12 rounded" />
+                        </div>
+                        <Skeleton className="h-4 w-16" />
+                      </div>
+                      <div className="grid grid-cols-4 gap-4">
+                        {[0, 1, 2, 3].map((j) => (
+                          <div key={j} className="flex flex-col gap-1.5">
+                            <Skeleton className="h-2.5 w-12" />
+                            <Skeleton className="h-4 w-16" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : error ? (
+                <div className="flex-1 flex items-center justify-center py-20 text-destructive text-sm font-normal">
+                  {error instanceof Error ? error.message : "Failed to load signals"}
+                </div>
+              ) : groupedSuggestions.length === 0 ? (
+                <div className="flex flex-col items-center justify-center p-12 text-center text-muted-foreground">
+                  <p className="text-sm font-normal text-foreground">No signals generated yet</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-8 pl-2">
+                  {groupedSuggestions.map((group) => (
+                    <div key={group.title} className="flex flex-col gap-4">
+                      <h4 className="text-[11px] font-mono tracking-wider uppercase text-muted-foreground/80 pl-4 border-b border-border/10 pb-1">
+                        {group.title}
+                      </h4>
+                      <div className="grid pl-4 ml-1">
+                        {group.items.map((s: import("@/modules/mimir/types/api").Suggestion) => (
+                          <SuggestionCard
+                            key={s.id}
+                            s={s}
+                            onSelectSymbol={onSelectSymbol}
+                            onClose={onClose}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function SuggestionCard({ s, onSelectSymbol, onClose }: {
+  s: import("@/modules/mimir/types/api").Suggestion;
+  onSelectSymbol?: (symbol: string) => void;
+  onClose: () => void;
+}) {
+  const isWin = s.status.includes('TARGET');
+  const isLoss = s.status === 'STOP_HIT';
+
+  const isPending = s.status === 'PENDING';
+  const isActive = s.status === 'ACTIVE' || s.status === 'OPEN' || isPending;
+
+
+
+  const fmtMinutes = (m: number) =>
+    m >= 390 ? `~${Math.round(m / 390)}d` : m >= 60 ? `~${Math.floor(m / 60)}h ${m % 60 ? `${m % 60}m` : ""}`.trim() : `~${m}m`;
+
+  const expectedHold = s.expectedHoldMinutes != null ? fmtMinutes(s.expectedHoldMinutes) : null;
+
+  // Realized attainability for this setup type (from closed-trade calibration)
+  const stats = s.setupStats;
+  const medianToTarget = stats?.medianTimeToTargetMin != null ? fmtMinutes(stats.medianTimeToTargetMin) : null;
+
+  // Time remaining before the signal's time-stop; render must stay pure, so the
+  // clock lives in state and ticks via an interval instead of calling Date.now() inline
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isActive || !s.expiresAt) return;
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, [isActive, s.expiresAt]);
+  let expiresIn: string | null = null;
+  if (isActive && s.expiresAt) {
+    const msLeft = new Date(s.expiresAt).getTime() - now;
+    if (msLeft > 0) {
+      const mins = Math.round(msLeft / 60_000);
+      expiresIn = mins >= 24 * 60 ? `${Math.round(mins / (24 * 60))}d` : mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+    } else {
+      expiresIn = "expiring";
+    }
+  }
+
+  return (
+    <div
+      onClick={() => {
+        if (onSelectSymbol) {
+          onSelectSymbol(s.symbol);
+          onClose();
+        }
+      }}
+      onKeyDown={onSelectSymbol ? (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelectSymbol(s.symbol);
+          onClose();
+        }
+      } : undefined}
+      role={onSelectSymbol ? "button" : undefined}
+      tabIndex={onSelectSymbol ? 0 : undefined}
+      aria-label={onSelectSymbol ? `${s.direction} ${s.symbol} — view details` : undefined}
+      className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 py-4 active:scale-[0.998] transition-all duration-150 ease-out cursor-pointer group hover:bg-foreground/[0.02] rounded-xl px-3 -mx-3 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60"
+    >
+      <div className="flex items-start sm:items-center gap-4">
+        {/* Status indicator pill */}
+        <div className={cn(
+          "w-1 h-12 rounded-full hidden sm:block",
+          isWin ? "bg-bull" : isLoss ? "bg-bear" : isActive ? "bg-primary" : "bg-muted-foreground/30"
+        )} />
+        
+        <div className="flex flex-col">
+          <div className="flex items-center gap-2 mb-1">
+            <span className={cn(
+              "text-[10px] font-mono font-semibold uppercase tracking-wider",
+              s.direction === 'BUY' ? "text-bull" : "text-bear"
+            )}>
+              {s.direction}
+            </span>
+            <span className={cn(
+              "text-[10px] font-mono font-semibold uppercase tracking-wider",
+              s.status === 'OPEN' || s.status === 'ACTIVE' ? "text-primary" : 
+              s.status === 'PENDING' ? "text-amber-500" :
+              s.status === 'STOP_HIT' ? "text-bear" :
+              s.status.includes('TARGET') ? "text-bull" :
+              "text-foreground"
+            )}>
+              {s.status.replace(/_/g, ' ')}
+            </span>
+            <span className="font-normal text-base tracking-tight">{s.symbol}</span>
+            <span className="text-[10px] text-muted-foreground/60 font-mono hidden sm:inline-block">#{s.id.slice(-4)}</span>
+          </div>
+          
+          <div className="flex flex-nowrap items-center gap-x-3 text-xs text-muted-foreground whitespace-nowrap overflow-hidden">
+            <span className="flex items-center gap-1">
+              <span className="text-foreground/40 text-[10px] uppercase tracking-wider">EN</span>
+              <span className="font-mono font-normal text-foreground/80">₹{fmtNum(s.entryPrice)}</span>
+            </span>
+            <span className="text-border/40">•</span>
+            <span className="flex items-center gap-1">
+              <span className="text-foreground/40 text-[10px] uppercase tracking-wider">TG</span>
+              <span className="font-mono font-normal text-foreground/80">₹{fmtNum(s.target1)}</span>
+            </span>
+            <span className="text-border/40">•</span>
+            <span className="flex items-center gap-1">
+              <span className="text-foreground/40 text-[10px] uppercase tracking-wider">SL</span>
+              <span className="font-mono font-normal text-foreground/80">₹{fmtNum(s.stopLoss)}</span>
+            </span>
+            <span className="text-border/40">•</span>
+            <span className="flex items-center gap-1">
+              <span className="text-foreground/40 text-[10px] uppercase tracking-wider">GEN</span>
+              <span className="font-mono font-normal text-foreground/80">{new Date(s.generatedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+            </span>
+            {expectedHold && (
+              <>
+                <span className="text-border/40">•</span>
+                <span className="flex items-center gap-1">
+                  <span className="text-foreground/40 text-[10px] uppercase tracking-wider">HOLD</span>
+                  <span className="font-mono font-normal text-foreground/80">{expectedHold}</span>
+                </span>
+              </>
+            )}
+            {expiresIn && (
+              <>
+                <span className="text-border/40">•</span>
+                <span className="flex items-center gap-1" title="Time remaining before this signal's time-stop">
+                  <span className="text-foreground/40 text-[10px] uppercase tracking-wider">EXP</span>
+                  <span className={cn("font-mono font-normal", expiresIn === "expiring" ? "text-amber-500" : "text-foreground/80")}>{expiresIn}</span>
+                </span>
+              </>
+            )}
+          </div>
+          {stats && (
+            <div className="flex items-center gap-2 mt-1.5" title={`Realized outcomes for ${s.setupType} over last 120 days (${stats.samples} closed trades)`}>
+              <span className={cn(
+                "text-[10px] font-normal px-1.5 py-0.5 rounded font-mono",
+                stats.winRate >= 60 ? "bg-bull/10 text-bull" : stats.winRate >= 45 ? "bg-amber-500/10 text-amber-500" : "bg-bear/10 text-bear"
+              )}>
+                {stats.winRate}% hit rate
+              </span>
+              {medianToTarget && (
+                <span className="text-[10px] font-mono text-muted-foreground">
+                  target typically reached in {medianToTarget}
+                </span>
+              )}
+              <span className="text-[10px] font-mono text-muted-foreground/50">n={stats.samples}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-end">
+        {/* Copy Button */}
+        <div className="flex items-center">
+          <CopyButton text={formatSuggestionText(s)} tooltip="Copy signal" />
+        </div>
+      </div>
+    </div>
+  );
+}

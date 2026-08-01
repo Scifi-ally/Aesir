@@ -1,0 +1,454 @@
+import { useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { cn } from "@/modules/mimir/lib/format";
+import { Card, CardHeader, CardTitle } from "@/modules/mimir/components/mimir/card";
+import { ScrollArea } from "@/modules/mimir/components/mimir/scroll-area";
+import { useStore } from "@/modules/mimir/store/useStore";
+import { useQueryClient } from "@tanstack/react-query";
+import { Target, ChevronRight, ArrowLeft, Plus, Trash2, Play, Activity, Clock, Sparkles, ListTree, Settings2 } from "lucide-react";
+
+interface ScreenerTargetsStackProps {
+  selectedSymbol: string;
+  sparklines?: Record<string, number[]>;
+  onSelect: (symbol: string) => void;
+  headerLeft?: React.ReactNode;
+}
+
+import { useScreener } from "@/modules/mimir/hooks/useScreener";
+import type { ScreenerTarget, ScreenerRule, RuleNode } from "@/modules/mimir/hooks/useScreener";
+import { ScreenerTargetRow } from "./ScreenerTargetRow";
+
+const operatorLabels: Record<string, string> = {
+  ">": ">",
+  "<": "<",
+  ">=": ">=",
+  "<=": "<=",
+  "==": "=",
+  "!=": "!=",
+  CROSSES_ABOVE: "crosses above",
+  CROSSES_BELOW: "crosses below",
+};
+
+function formatShortDate(value?: string | null) {
+  if (!value) return "Never";
+  return new Date(value).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function countConditions(node?: RuleNode | null): number {
+  if (!node) return 0;
+  if (node.type === "CONDITION") return 1;
+  return (node.rules || []).reduce((total, child) => total + countConditions(child), 0);
+}
+
+function summarizeRule(rule?: ScreenerRule) {
+  if (!rule) return "No rule attached";
+  if (rule.conditions) {
+    const count = countConditions(rule.conditions);
+    return `${count} condition${count === 1 ? "" : "s"} (${rule.conditions.type})`;
+  }
+  if (rule.indicatorA && rule.operator && rule.indicatorB) return `${rule.indicatorA} ${operatorLabels[rule.operator] || rule.operator} ${rule.indicatorB}`;
+  return "Rule details unavailable";
+}
+
+
+
+
+
+export function ScreenerTargetsStack({ selectedSymbol, onSelect, headerLeft }: ScreenerTargetsStackProps) {
+  const queryClient = useQueryClient();
+  const showIsland = useStore((s) => s.showIsland);
+  const setCommandPaletteOpen = useStore((s) => s.setCommandPaletteOpen);
+
+  const [activeWatchlist, setActiveWatchlist] = useState<number | null | "GLOBAL">(null);
+
+  const {
+    targetsQuery: { data: targets = [], error: targetsError },
+    screenersQuery: { data: screeners = [], error: screenersError },
+    matchesQuery: { data: matches = [], error: matchesError },
+    deleteTargetMutation,
+    deleteWatchlistMutation,
+    runScreenerMutation,
+  } = useScreener();
+  
+  const loadError = targetsError || screenersError || matchesError;
+
+  const customWatchlists = useMemo(() => screeners.filter((s) => s.targetType === "CUSTOM"), [screeners]);
+
+  const targetsByWatchlist = useMemo(() => {
+    const groups: Record<string, ScreenerTarget[]> = { GLOBAL: [] };
+    customWatchlists.forEach((watchlist) => {
+      groups[watchlist.id] = [];
+    });
+
+    targets.forEach((target) => {
+      if (target.screenerId && groups[target.screenerId]) {
+        groups[target.screenerId].push(target);
+      } else {
+        groups.GLOBAL.push(target);
+      }
+    });
+    return groups;
+  }, [targets, customWatchlists]);
+
+  const runNow = (screenerId?: number) => {
+    showIsland({
+      title: screenerId ? "Run this watchlist?" : "Run screeners now?",
+      subtitle: screenerId
+        ? "This runs only this watchlist's active rule and refreshes matches when it finishes."
+        : "This runs active screener rules immediately and refreshes matches when it finishes.",
+      confirmText: "Run",
+      cancelText: "Cancel",
+      onConfirm: async () => {
+        await runScreenerMutation.mutateAsync(screenerId);
+        return true;
+      },
+    });
+  };
+
+  const renderTargetRow = (row: ScreenerTarget, title: string) => {
+    return (
+      <ScreenerTargetRow
+        key={row.id}
+        row={row}
+        title={title}
+        selectedSymbol={selectedSymbol}
+        onSelect={onSelect}
+        onDelete={async (id) => { await deleteTargetMutation.mutateAsync(id); }}
+      />
+    );
+  };
+
+  if (activeWatchlist !== null) {
+    const activeTargets = targetsByWatchlist[String(activeWatchlist)] || [];
+    const activeRule = activeWatchlist === "GLOBAL" ? undefined : customWatchlists.find((w) => w.id === activeWatchlist);
+    const title = activeWatchlist === "GLOBAL" ? "Uncategorized Targets" : activeRule?.outputName || "Watchlist";
+    const manualTargets = activeTargets.filter((target) => !target.notes);
+    const autoTargets = activeTargets.filter((target) => !!target.notes);
+    const recentMatches = matches
+      .filter((match) => activeWatchlist === "GLOBAL" ? true : match.screenerId === activeWatchlist)
+      .slice(0, 5);
+
+    return (
+      <Card className="@container flex h-full min-h-0 flex-col border-0 bg-transparent">
+        <CardHeader className="shrink-0 h-[48px] px-3 py-0 space-y-0 flex flex-row items-center justify-between gap-4 overflow-hidden">
+          {headerLeft}
+          <div className="flex items-center gap-3 justify-between w-full min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <button onClick={() => setActiveWatchlist(null)} className="p-1 hover:bg-secondary/20 rounded-full transition-colors text-muted-foreground hover:text-foreground shrink-0">
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+              <CardTitle className="text-sm font-normal tracking-tight text-foreground truncate">
+                {title}
+              </CardTitle>
+            </div>
+            {activeWatchlist !== "GLOBAL" && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCommandPaletteOpen(true, "", activeWatchlist as number)}
+                  className="flex items-center text-xs font-normal px-2 py-1 bg-secondary/80 hover:bg-secondary text-foreground rounded transition-colors"
+                >
+                  <Plus className="h-3 w-3 mr-1" />
+                  Add Stock
+                </button>
+                <button
+                  onClick={() => setCommandPaletteOpen(true, "", null, activeWatchlist as number)}
+                  className="flex items-center gap-1 text-xs font-normal px-2.5 py-1 bg-secondary/80 hover:bg-secondary text-foreground rounded transition-colors"
+                  title="Edit scan conditions and schedule"
+                >
+                  <Settings2 className="h-3 w-3" />
+                  Edit Rule
+                </button>
+                <button
+                  onClick={() => runNow(activeWatchlist)}
+                  disabled={runScreenerMutation.isPending}
+                  className="relative flex items-center gap-1 text-xs font-normal px-3 py-1 bg-bull text-bull-foreground rounded shadow-[0_0_12px_rgba(34,197,94,0.4)] hover:shadow-[0_0_20px_rgba(34,197,94,0.7)] hover:bg-bull/90 transition-all disabled:opacity-50 z-10"
+                  title="Run scan for this watchlist"
+                >
+                  {runScreenerMutation.isPending ? (
+                    <div className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  ) : (
+                    <Play className="h-3 w-3 fill-current" />
+                  )}
+                  {runScreenerMutation.isPending ? "Running..." : "Run Scan"}
+                </button>
+                <button
+                  onClick={() => {
+                    showIsland({
+                      title: "Delete Watchlist?",
+                      subtitle: "This will permanently remove the watchlist and all its stocks.",
+                      isDestructive: true,
+                      confirmText: "Delete",
+                      cancelText: "Cancel",
+                      onConfirm: async () => {
+                        await deleteWatchlistMutation.mutateAsync(activeWatchlist as number);
+                        return true;
+                      },
+                    });
+                  }}
+                  disabled={deleteWatchlistMutation.isPending}
+                  className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors disabled:opacity-50"
+                  title="Delete Watchlist"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+
+        <ScrollArea className="block flex-1 min-h-0 px-2 pb-2 mt-2" role="listbox">
+          <div className="flex flex-col gap-3">
+            <motion.div layout className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg bg-secondary/10 px-3 py-2">
+                <div className="flex items-center gap-1.5 text-[10px] font-normal uppercase tracking-wider text-muted-foreground"><Activity className="h-3 w-3" /> Status</div>
+                <div className={cn("mt-1 text-xs font-normal", activeRule?.status === "PAUSED" ? "text-amber-500" : "text-primary")}>{activeRule?.status || "ACTIVE"}</div>
+              </div>
+              <div className="rounded-lg bg-secondary/10 px-3 py-2">
+                <div className="flex items-center gap-1.5 text-[10px] font-normal uppercase tracking-wider text-muted-foreground"><Clock className="h-3 w-3" /> Last trigger</div>
+                <div className="mt-1 truncate text-xs font-normal text-foreground">{formatShortDate(activeRule?.lastTriggeredAt)}</div>
+              </div>
+              <div className="rounded-lg bg-secondary/10 px-3 py-2">
+                <div className="flex items-center gap-1.5 text-[10px] font-normal uppercase tracking-wider text-muted-foreground"><ListTree className="h-3 w-3" /> Rule</div>
+                <div className="mt-1 truncate text-xs font-normal text-foreground">{summarizeRule(activeRule)}</div>
+              </div>
+              <div className="rounded-lg bg-secondary/10 px-3 py-2">
+                <div className="flex items-center gap-1.5 text-[10px] font-normal uppercase tracking-wider text-muted-foreground"><Sparkles className="h-3 w-3" /> Sources</div>
+                <div className="mt-1 text-xs font-normal text-foreground">{autoTargets.length} auto / {manualTargets.length} manual</div>
+              </div>
+            </motion.div>
+
+            {loadError ? (
+              <div className="flex flex-col items-center justify-center text-xs font-mono py-10 px-4 text-center gap-3">
+                <p className="text-bear font-normal">Couldn't load watchlists</p>
+                <button
+                  onClick={() => {
+                    void queryClient.invalidateQueries({ queryKey: ["screener_targets"] });
+                    void queryClient.invalidateQueries({ queryKey: ["screener_rules"] });
+                    void queryClient.invalidateQueries({ queryKey: ["screener_matches"] });
+                  }}
+                  className="rounded-lg bg-secondary/30 px-3 py-2 text-[11px] font-normal text-foreground transition-colors hover:bg-secondary/50"
+                >
+                  Try Again
+                </button>
+              </div>
+            ) : activeTargets.length === 0 ? (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }} 
+                animate={{ opacity: 1, scale: 1 }} 
+                transition={{ type: "spring", bounce: 0, duration: 0.4 }} 
+                className="flex flex-col items-center justify-center py-10 px-4 text-center"
+              >
+                <div className="h-10 w-10 rounded-full bg-foreground/5 flex items-center justify-center mb-4">
+                  <Target className="h-4 w-4 text-muted-foreground/40" />
+                </div>
+                <p className="text-[13px] font-medium text-foreground tracking-tight">Watchlist is empty</p>
+                <p className="text-[11px] font-normal text-muted-foreground/50 mt-1 max-w-[200px]">Add stocks manually or set up a scanner schedule to automate discovery.</p>
+                <div className="mt-6 flex flex-wrap justify-center gap-2">
+                  <button onClick={() => setCommandPaletteOpen(true, "", activeWatchlist as number)} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[11px] font-medium text-primary-foreground transition-all duration-150 hover:brightness-110 active:scale-[0.97]">
+                    <Plus className="h-3.5 w-3.5" /> Add Stock
+                  </button>
+                  <button onClick={() => setCommandPaletteOpen(true, "scan ")} className="flex items-center gap-1.5 rounded-lg bg-secondary/40 px-3 py-2 text-[11px] font-medium text-foreground transition-colors hover:bg-secondary/60">
+                    <Clock className="h-3.5 w-3.5" /> Schedule
+                  </button>
+                  <button onClick={() => runNow(activeWatchlist === "GLOBAL" ? undefined : activeWatchlist)} disabled={runScreenerMutation.isPending} className="flex items-center gap-1.5 rounded-lg bg-secondary/40 px-3 py-2 text-[11px] font-medium text-foreground transition-colors hover:bg-secondary/60 disabled:opacity-50">
+                    {runScreenerMutation.isPending ? <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <Play className="h-3.5 w-3.5" />}
+                    {runScreenerMutation.isPending ? "Running..." : "Run Scan"}
+                  </button>
+                </div>
+              </motion.div>
+            ) : (
+              <AnimatePresence>
+                {autoTargets.length > 0 && (
+                  <div className="flex flex-col gap-2.5">
+                    <div className="px-1 text-[10px] font-medium font-sans uppercase tracking-[0.12em] text-muted-foreground/70">Auto matches</div>
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(310px,1fr))] gap-3">
+                      {autoTargets.map((row) => renderTargetRow(row, title))}
+                    </div>
+                  </div>
+                )}
+                {manualTargets.length > 0 && (
+                  <div className="flex flex-col gap-2.5">
+                    <div className="px-1 text-[10px] font-medium font-sans uppercase tracking-[0.12em] text-muted-foreground/70">Manual stocks</div>
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(310px,1fr))] gap-3">
+                      {manualTargets.map((row) => renderTargetRow(row, title))}
+                    </div>
+                  </div>
+                )}
+              </AnimatePresence>
+            )}
+
+            {recentMatches.length > 0 && (
+              <motion.div layout className="mt-1 rounded-xl bg-background/30 p-3">
+                <div className="mb-2 text-[10px] font-medium font-sans uppercase tracking-[0.12em] text-muted-foreground/70">Recent activity</div>
+                <div className="flex flex-col gap-2">
+                  {recentMatches.map((match) => (
+                    <div key={match.id} className="flex items-start justify-between gap-3 text-xs">
+                      <div className="min-w-0 flex-1">
+                        <span className="font-normal text-foreground mr-2">{match.symbol}</span>
+                        <span className="text-muted-foreground break-words">{match.condition}</span>
+                      </div>
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{formatShortDate(match.matchedAt)}</span>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </div>
+        </ScrollArea>
+      </Card>
+    );
+  }
+
+  const totalCustomTargets = customWatchlists.reduce((total, watchlist) => total + (targetsByWatchlist[watchlist.id]?.length || 0), 0);
+  const activeRules = customWatchlists.filter((watchlist) => watchlist.status !== "PAUSED").length;
+
+  if (customWatchlists.length === 0) {
+    return (
+      <Card className="@container flex h-full min-h-0 flex-col border-0 bg-transparent">
+        <CardHeader className="shrink-0 h-[48px] px-3 py-0 space-y-0 flex flex-row items-center justify-between gap-4 overflow-hidden">
+          {headerLeft}
+        </CardHeader>
+        <div className="flex-1 flex items-center justify-center p-6 text-center">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ type: "spring", bounce: 0, duration: 0.4 }}
+            className="flex flex-col items-center justify-center max-w-[240px]"
+          >
+            <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+              <Target className="h-5 w-5 text-primary/70" />
+            </div>
+            <p className="text-[13px] font-medium text-foreground tracking-tight">No Custom Watchlists</p>
+            <p className="text-[11px] font-normal text-muted-foreground/60 mt-1 mb-6 leading-relaxed">Create a watchlist to track specific stocks or scan for technical setups.</p>
+            <button onClick={() => setCommandPaletteOpen(true, "scan ")} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-[11px] font-medium text-primary-foreground hover:brightness-110 active:scale-95 transition-all shadow-sm shadow-primary/20 hover:shadow-primary/40">
+              <Plus className="h-3.5 w-3.5" /> Create Watchlist
+            </button>
+          </motion.div>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="@container flex h-full min-h-0 flex-col border-0 bg-transparent">
+      <CardHeader className="shrink-0 h-[48px] px-3 py-0 space-y-0 flex flex-row items-center justify-between gap-4 overflow-hidden">
+        {headerLeft}
+        <div className="flex items-center justify-between gap-3 w-full min-w-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <CardTitle className="text-sm font-normal tracking-tight text-foreground whitespace-nowrap">
+              Custom Watchlists
+            </CardTitle>
+            <div className="flex items-center gap-1.5 font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/60 whitespace-nowrap hidden @min-md:flex">
+              <span className="text-foreground/70">{customWatchlists.length} lists</span>
+              <span className="text-foreground/20">/</span>
+              <span className="text-foreground/70">{totalCustomTargets} symbols</span>
+              <span className="text-foreground/20">/</span>
+              <span className="text-primary/90">{activeRules} active</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCommandPaletteOpen(true, "scan ")}
+            className="group relative flex shrink-0 items-center gap-1.5 overflow-hidden rounded-full bg-white/5 px-4 py-1.5 text-[11px] font-normal text-foreground transition-all hover:bg-white/10 hover:shadow-[0_0_20px_rgba(255,255,255,0.1)] active:scale-[0.97]"
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-primary/10 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+            <Plus className="relative h-3.5 w-3.5 text-primary" />
+            <span className="relative">New</span>
+          </button>
+        </div>
+      </CardHeader>
+
+      <ScrollArea className="block flex-1 min-h-0 px-2 pb-2">
+
+        <div className="flex flex-col gap-1.5 h-full">
+          <AnimatePresence>
+            {customWatchlists.map((watchlist) => {
+            const watchlistTargets = targetsByWatchlist[watchlist.id] || [];
+            const autoCount = watchlistTargets.filter((target) => !!target.notes).length;
+            const isPaused = watchlist.status === "PAUSED";
+            return (
+              <motion.div
+                layout
+                key={watchlist.id}
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ layout: { type: "spring", bounce: 0, duration: 0.3 } }}
+                className="group flex w-full items-center justify-between rounded hover:bg-white/5 py-1 px-2 cursor-pointer transition-colors"
+                onClick={() => setActiveWatchlist(watchlist.id)}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-1.5 w-1.5 items-center justify-center">
+                      <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-40", isPaused ? "bg-amber-400" : "bg-primary")} />
+                      <span className={cn("relative inline-flex h-1.5 w-1.5 rounded-full", isPaused ? "bg-amber-400" : "bg-primary")} />
+                    </span>
+                    <span className="truncate text-sm font-normal tracking-tight text-foreground/90 group-hover:text-foreground">
+                      {watchlist.outputName || "Unnamed Watchlist"}
+                    </span>
+                  </div>
+                  
+                  <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-muted-foreground">
+                    <span className={cn("font-normal", isPaused ? "text-amber-400/80" : "text-primary/80")}>
+                      {isPaused ? "PAUSED" : "ACTIVE"}
+                    </span>
+                    <span className="text-foreground/20">|</span>
+                    <span>{watchlistTargets.length} sym</span>
+                    <span className="text-foreground/20">|</span>
+                    <span className={autoCount > 0 ? "text-primary" : ""}>{autoCount} matched</span>
+                    <span className="text-foreground/20">|</span>
+                    <span>{watchlist.timeframe || "15m"}</span>
+                  </div>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={() => setCommandPaletteOpen(true, "", watchlist.id)}
+                    className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-all hover:bg-white/10 hover:text-foreground"
+                    title="Add stocks"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => runNow(watchlist.id)}
+                    disabled={runScreenerMutation.isPending || isPaused}
+                    className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-all hover:bg-primary/20 hover:text-primary disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                    title={isPaused ? "Resume this watchlist before running it" : "Run this watchlist"}
+                  >
+                    <Play className="h-3 w-3 fill-current ml-0.5" />
+                  </button>
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground ml-1" />
+                </div>
+              </motion.div>
+            );
+          })}
+          </AnimatePresence>
+
+          {targetsByWatchlist.GLOBAL?.length > 0 && (
+            <button
+              onClick={() => setActiveWatchlist("GLOBAL")}
+              className="group flex w-full items-center justify-between rounded hover:bg-white/5 py-1 px-2 text-left transition-colors"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/60" />
+                  <span className="truncate text-sm font-normal tracking-tight text-foreground/90 group-hover:text-foreground">Uncategorized Targets</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-muted-foreground">
+                  <span className="text-foreground/20">|</span>
+                  <span>{targetsByWatchlist.GLOBAL.length} sym</span>
+                  <span className="text-foreground/20">|</span>
+                  <span>Manual</span>
+                </div>
+              </div>
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+            </button>
+          )}
+
+        </div>
+      </ScrollArea>
+    </Card>
+  );
+}

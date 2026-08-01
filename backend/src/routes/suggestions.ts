@@ -1,0 +1,635 @@
+import { Router } from "express";
+import { db } from "../../db/src";
+import { suggestionsTable, learningAnalyticsTable } from "../../db/src";
+import { eq, desc, and, gte, lte, count, inArray } from "drizzle-orm";
+import {
+  GetSuggestionHistoryQueryParams,
+  GetSuggestionParams,
+  CreateSuggestionBody,
+  ModifyStopLossBody,
+  ModifyTargetBody,
+} from "../schemas";
+import { fetchLTPForSymbols } from "../suggestions/generator";
+import { todayStartUTC, getISTDayBounds, getISTDateStr } from "../lib/ist-time";
+import { logger } from "../lib/logger";
+import { logApiError, sendFallback } from "../lib/api-errors";
+import { runLearningPipeline } from "../analysis/learning_engine";
+import { getCalibration, getAllCalibrations, ensureFresh } from "../analysis/calibration_engine";
+import { broadcast } from "../ws/websocket_server";
+import { createServerEvent } from "../ws/events";
+
+const router = Router();
+
+// GET /api/suggestions/active
+router.get("/suggestions/active", async (req, res) => {
+  try {
+    await ensureFresh(); // warm calibration cache so setupStats is populated
+    const symbolParam = req.query.symbol as string | undefined;
+    // Open = filled (ACTIVE) + awaiting entry touch (PENDING)
+    const conditions = [inArray(suggestionsTable.status, ["ACTIVE", "PENDING"])];
+    if (symbolParam) {
+      conditions.push(eq(suggestionsTable.symbol, symbolParam.toUpperCase()));
+    }
+
+    const suggestions = await db
+      .select()
+      .from(suggestionsTable)
+      .where(and(...conditions))
+      .orderBy(desc(suggestionsTable.generatedAt));
+
+    logger.debug({ count: suggestions.length }, "Retrieved active suggestions");
+    if (suggestions.length > 0) {
+      const symbols = suggestions.map((s) => s.symbol).join(", ");
+      logger.debug({ symbols }, "Symbols with active suggestions");
+      logger.debug({
+        symbol: suggestions[0].symbol,
+        direction: suggestions[0].direction,
+        entryPrice: suggestions[0].entryPrice,
+        stopLoss: suggestions[0].stopLoss,
+        target1: suggestions[0].target1,
+        riskReward: suggestions[0].riskReward,
+        status: suggestions[0].status,
+        generatedAt: suggestions[0].generatedAt,
+      }, "First suggestion details");
+    }
+
+    const prices = await fetchLTPForSymbols([
+      ...new Set(suggestions.map((s) => s.symbol)),
+    ]);
+    const result = suggestions.map((s) => serializeSuggestion(s, prices));
+    logger.debug({ returnCount: result.length }, "Returning serialized suggestions");
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "Error fetching active suggestions");
+    logApiError(req, err);
+    sendFallback(res, [], "active-suggestions-error");
+  }
+});
+
+// GET /api/suggestions/today
+router.get("/suggestions/today", async (req, res) => {
+  try {
+    const todayStart = todayStartUTC();
+
+    const suggestions = await db
+      .select()
+      .from(suggestionsTable)
+      .where(gte(suggestionsTable.generatedAt, todayStart))
+      .orderBy(desc(suggestionsTable.generatedAt))
+      .limit(500);
+
+    const activeSymbols = suggestions
+      .filter((s) => s.status === "ACTIVE")
+      .map((s) => s.symbol);
+    const prices = await fetchLTPForSymbols([...new Set(activeSymbols)]);
+
+    res.json(suggestions.map((s) => serializeSuggestion(s, prices)));
+  } catch (err) {
+    logApiError(req, err);
+    sendFallback(res, [], "today-suggestions-error");
+  }
+});
+
+// GET /api/suggestions/history
+router.get("/suggestions/history", async (req, res) => {
+  const parsed = GetSuggestionHistoryQueryParams.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid query parameters" });
+    return;
+  }
+
+  let { page = 1, limit = 50 } = parsed.data;
+  const { status, setup_type, direction, from_date, to_date } = parsed.data;
+
+  // Validate pagination bounds
+  page = Math.max(1, Math.min(page, 10000)); // Max 10k pages
+  limit = Math.max(1, Math.min(limit, 100)); // Max 100 per page to prevent abuse
+
+  try {
+    const conditions = [];
+
+    if (status) conditions.push(eq(suggestionsTable.status, status));
+    if (setup_type) conditions.push(eq(suggestionsTable.setupType, setup_type));
+    if (direction) conditions.push(eq(suggestionsTable.direction, direction));
+    // Day bounds must be IST trading days — setHours() used server-local time,
+    // shifting the window for any server not running in IST.
+    if (from_date) {
+      conditions.push(gte(suggestionsTable.generatedAt, getISTDayBounds(getISTDateStr(from_date)).start));
+    }
+    if (to_date) {
+      conditions.push(lte(suggestionsTable.generatedAt, getISTDayBounds(getISTDateStr(to_date)).end));
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // Execute both queries in parallel for efficiency
+    const [rows, totalResult] = await Promise.all([
+      db
+        .select()
+        .from(suggestionsTable)
+        .where(whereClause)
+        .orderBy(desc(suggestionsTable.generatedAt))
+        .limit(limit)
+        .offset((page - 1) * limit),
+      db.select({ count: count() }).from(suggestionsTable).where(whereClause),
+    ]);
+
+    const activeSymbols = rows
+      .filter((r) => r.status === "ACTIVE")
+      .map((r) => r.symbol);
+    
+    let prices: Record<string, number> = {};
+    if (activeSymbols.length > 0) {
+      const { fetchLTPForSymbols } = await import("../suggestions/generator");
+      prices = await fetchLTPForSymbols([...new Set(activeSymbols)]);
+    }
+
+    res.json({
+      data: rows.map((row) => serializeSuggestion(row, prices)),
+      total: totalResult[0]?.count ?? 0,
+      page,
+      limit,
+    });
+  } catch (err) {
+    logApiError(req, err);
+    sendFallback(res, { data: [], total: 0, page, limit }, "suggestion-history-error");
+  }
+});
+
+// GET /api/suggestions/accuracy — realized track record for display
+// IMPORTANT: Must be defined BEFORE /suggestions/:id
+router.get("/suggestions/accuracy", async (req, res) => {
+  try {
+    await ensureFresh();
+    const cals = getAllCalibrations();
+    const closed = cals.reduce((a, c) => a + c.samples, 0);
+    const wins = cals.reduce((a, c) => a + Math.round(c.winRate * c.samples), 0);
+    const totalPnl = cals.reduce((a, c) => a + c.avgPnlInr * c.samples, 0);
+    res.json({
+      closedTrades: closed,
+      winRate: closed > 0 ? Math.round((wins / closed) * 100) : null,
+      totalPnlInr: Math.round(totalPnl),
+      lookbackDays: 120,
+      setups: cals
+        .filter((c) => c.samples >= 5)
+        .sort((a, b) => b.samples - a.samples)
+        .map((c) => ({
+          setupType: c.setupType,
+          tradeType: c.tradeType,
+          samples: c.samples,
+          winRate: Math.round(c.winRate * 100),
+          avgPnlInr: Math.round(c.avgPnlInr),
+          medianTimeToTargetMin: c.medianTimeToTargetMin != null ? Math.round(c.medianTimeToTargetMin) : null,
+        })),
+    });
+  } catch (err) {
+    logApiError(req, err);
+    sendFallback(res, { closedTrades: 0, winRate: null, totalPnlInr: 0, lookbackDays: 120, setups: [] }, "accuracy-error");
+  }
+});
+
+// GET /api/suggestions/learning/insights
+// IMPORTANT: Must be defined BEFORE /suggestions/:id to avoid 'learning' being captured as :id
+router.get("/suggestions/learning/insights", async (req, res) => {
+  try {
+    const insights = await db
+      .select()
+      .from(learningAnalyticsTable)
+      .orderBy(desc(learningAnalyticsTable.updatedAt));
+
+    res.json(insights);
+  } catch (err) {
+    logApiError(req, err);
+    sendFallback(res, [], "learning-insights-error");
+  }
+});
+
+// POST /api/suggestions/learning/trigger
+// IMPORTANT: Must be defined BEFORE /suggestions/:id to avoid 'learning' being captured as :id
+router.post("/suggestions/learning/trigger", async (req, res) => {
+  try {
+    await runLearningPipeline();
+    res.json({ success: true, message: "Learning pipeline executed successfully" });
+  } catch (err) {
+    req.log.error({ err }, "Failed to trigger learning pipeline");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/suggestions/:id
+router.get("/suggestions/:id", async (req, res) => {
+  const parsed = GetSuggestionParams.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid params" });
+    return;
+  }
+
+  try {
+    const [suggestion] = await db
+      .select()
+      .from(suggestionsTable)
+      .where(eq(suggestionsTable.id, parsed.data.id))
+      .limit(1);
+
+    if (!suggestion) {
+      res.status(404).json({ error: "Suggestion not found" });
+      return;
+    }
+
+    res.json(serializeSuggestion(suggestion));
+  } catch (err) {
+    req.log.error({ err }, "Failed to get suggestion");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+function serializeSuggestion(
+  s: typeof suggestionsTable.$inferSelect,
+  prices: Record<string, number> = {},
+) {
+  // Per-setup realized stats — how often this setup actually reached target,
+  // and how long winners took. Null until enough closed samples accumulate.
+  const cal = getCalibration(s.setupType, s.tradeType);
+  const setupStats =
+    cal && cal.samples >= 10
+      ? {
+          samples: cal.samples,
+          winRate: Math.round(cal.winRate * 100),
+          medianTimeToTargetMin: cal.medianTimeToTargetMin != null ? Math.round(cal.medianTimeToTargetMin) : null,
+        }
+      : null;
+
+  return {
+    id: s.id,
+    symbol: s.symbol,
+    name: s.name ?? s.symbol,
+    exchange: s.exchange,
+    direction: s.direction,
+    tradeType: s.tradeType,
+    entryPrice: parseFloat(s.entryPrice),
+    stopLoss: parseFloat(s.stopLoss),
+    target1: parseFloat(s.target1),
+    target2: s.target2 != null ? parseFloat(s.target2) : null,
+    riskReward: s.riskReward != null ? parseFloat(s.riskReward) : null,
+    quantity: s.quantity,
+    maxRiskInr: s.maxRiskInr != null ? parseFloat(s.maxRiskInr) : null,
+    stopDistancePct:
+      s.stopDistancePct != null ? parseFloat(s.stopDistancePct) : null,
+    setupType: s.setupType,
+    marketRegime: s.marketRegime ?? "UNKNOWN",
+    reasoning: s.reasoning ?? "",
+    validityTill: s.validityTill ?? "15:00",
+    expectedHoldMinutes: s.expectedHoldMinutes,
+    expiresAt: s.expiresAt,
+    status: s.status,
+    outcomePrice: s.outcomePrice != null ? parseFloat(s.outcomePrice) : null,
+    pnlInr: s.pnlInr != null ? parseFloat(s.pnlInr) : null,
+    currentPrice:
+      s.status === "ACTIVE"
+        ? (prices[s.symbol] ?? null)
+        : s.outcomePrice != null
+          ? parseFloat(s.outcomePrice)
+          : null,
+    confidence: s.confidence ?? 0,
+    generatedAt: s.generatedAt.toISOString(),
+    closedAt: s.closedAt?.toISOString() ?? null,
+    signalFactors: s.signalFactors,
+    setupStats,
+  };
+}
+
+// NOTE: /suggestions/learning/* routes moved above /suggestions/:id to prevent route collision
+
+// POST /api/suggestions/:id/accept
+router.post("/suggestions/:id/accept", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const [suggestion] = await db
+      .select()
+      .from(suggestionsTable)
+      .where(eq(suggestionsTable.id, id))
+      .limit(1);
+
+    if (!suggestion) {
+      res.status(404).json({ error: "Suggestion not found" });
+      return;
+    }
+
+    // Only an awaiting-entry row can be accepted — anything else is already
+    // live or terminal, and resurrecting a closed row would re-enter it into
+    // outcome polling and double-count it in calibration.
+    if (suggestion.status !== "PENDING") {
+      res
+        .status(409)
+        .json({ error: `Cannot accept suggestion with status ${suggestion.status}` });
+      return;
+    }
+
+    // Honest fill model: accepting enters at the current market price, not the
+    // planned entry — mirror the accuracy_tracker promotion by recording the
+    // fill as entryPrice and re-seeding the MFE/MAE watermarks at it.
+    const prices = await fetchLTPForSymbols([suggestion.symbol]);
+    const ltp = prices[suggestion.symbol];
+    const fill = ltp != null && Number.isFinite(ltp) && ltp > 0 ? ltp.toFixed(2) : null;
+    const updated = await db
+      .update(suggestionsTable)
+      .set(
+        fill != null
+          ? { status: "ACTIVE", entryPrice: fill, highestPrice: fill, lowestPrice: fill }
+          : { status: "ACTIVE" },
+      )
+      .where(and(eq(suggestionsTable.id, id), eq(suggestionsTable.status, "PENDING")))
+      .returning({ id: suggestionsTable.id });
+    if (updated.length === 0) {
+      res.status(409).json({ error: "Suggestion status changed concurrently; not accepted" });
+      return;
+    }
+    res.json({ success: true });
+    broadcast(createServerEvent.suggestionUpdated({ id, status: "ACTIVE" }), "suggestions");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (err: any) {
+    logApiError(req, err);
+    res.status(500).json({ error: "Failed to accept suggestion" });
+  }
+});
+
+// POST /api/suggestions/:id/reject
+router.post("/suggestions/:id/reject", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const [suggestion] = await db
+      .select()
+      .from(suggestionsTable)
+      .where(eq(suggestionsTable.id, id))
+      .limit(1);
+
+    if (!suggestion) {
+      res.status(404).json({ error: "Suggestion not found" });
+      return;
+    }
+
+    if (suggestion.status !== "ACTIVE" && suggestion.status !== "PENDING") {
+      res
+        .status(409)
+        .json({ error: `Cannot reject suggestion with status ${suggestion.status}` });
+      return;
+    }
+
+    await db
+      .update(suggestionsTable)
+      .set({ status: "REJECTED", closedAt: new Date() })
+      .where(and(eq(suggestionsTable.id, id), inArray(suggestionsTable.status, ["ACTIVE", "PENDING"])));
+    res.json({ success: true });
+    broadcast(createServerEvent.suggestionUpdated({ id, status: "REJECTED" }), "suggestions");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (err: any) {
+    logApiError(req, err);
+    res.status(500).json({ error: "Failed to reject suggestion" });
+  }
+});
+
+// POST /api/suggestions/:id/close
+router.post("/suggestions/:id/close", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const [suggestion] = await db
+      .select()
+      .from(suggestionsTable)
+      .where(eq(suggestionsTable.id, id))
+      .limit(1);
+
+    if (!suggestion) {
+      res.status(404).json({ error: "Suggestion not found" });
+      return;
+    }
+
+    if (suggestion.status !== "PENDING" && suggestion.status !== "ACTIVE") {
+      res
+        .status(409)
+        .json({ error: `Suggestion already closed with status ${suggestion.status}` });
+      return;
+    }
+
+    // Same MISSED/EXPIRED split as the expiry sweeps: a never-filled PENDING
+    // row was never a trade, so closing it must not record a calibration
+    // non-win — only a filled ACTIVE position closes as EXPIRED.
+    const nextStatus = suggestion.status === "PENDING" ? "MISSED" : "EXPIRED";
+    const updated = await db
+      .update(suggestionsTable)
+      .set({ status: nextStatus, closedAt: new Date() })
+      .where(and(eq(suggestionsTable.id, id), eq(suggestionsTable.status, suggestion.status)))
+      .returning({ id: suggestionsTable.id });
+    if (updated.length === 0) {
+      res.status(409).json({ error: "Suggestion status changed concurrently; not closed" });
+      return;
+    }
+    res.json({ success: true, status: nextStatus });
+    broadcast(createServerEvent.suggestionUpdated({ id, status: nextStatus }), "suggestions");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (err: any) {
+    logApiError(req, err);
+    res.status(500).json({ error: "Failed to close position" });
+  }
+});
+
+// POST /api/suggestions/:id/modify-stop
+router.post("/suggestions/:id/modify-stop", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const parsed = ModifyStopLossBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid stopLoss value" });
+      return;
+    }
+
+    const [suggestion] = await db
+      .select()
+      .from(suggestionsTable)
+      .where(eq(suggestionsTable.id, id))
+      .limit(1);
+
+    if (!suggestion) {
+      res.status(404).json({ error: "Suggestion not found" });
+      return;
+    }
+
+    if (suggestion.status !== "ACTIVE" && suggestion.status !== "PENDING") {
+      res
+        .status(409)
+        .json({ error: `Cannot modify suggestion with status ${suggestion.status}` });
+      return;
+    }
+
+    const { stopLoss } = parsed.data;
+    // Direction sanity: a BUY stop at/above entry (or SELL at/below) would be
+    // instantly triggerable and corrupts risk accounting.
+    const entry = parseFloat(suggestion.entryPrice);
+    if (suggestion.direction === "BUY" ? stopLoss >= entry : stopLoss <= entry) {
+      res.status(400).json({
+        error: `Invalid stopLoss for ${suggestion.direction}: must be ${suggestion.direction === "BUY" ? "below" : "above"} entry price ${entry.toFixed(2)}`,
+      });
+      return;
+    }
+    const updated = await db
+      .update(suggestionsTable)
+      .set({ stopLoss: stopLoss.toFixed(2) })
+      .where(and(eq(suggestionsTable.id, id), inArray(suggestionsTable.status, ["ACTIVE", "PENDING"])))
+      .returning({ id: suggestionsTable.id });
+    if (updated.length === 0) {
+      res.status(409).json({ error: "Suggestion status changed concurrently; stop loss not modified" });
+      return;
+    }
+    res.json({ success: true });
+    broadcast(createServerEvent.suggestionUpdated({ id, status: suggestion.status }), "suggestions");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (err: any) {
+    logApiError(req, err);
+    res.status(500).json({ error: "Failed to modify stop loss" });
+  }
+});
+
+// POST /api/suggestions/:id/modify-target
+router.post("/suggestions/:id/modify-target", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const parsed = ModifyTargetBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid target1 value" });
+      return;
+    }
+
+    const [suggestion] = await db
+      .select()
+      .from(suggestionsTable)
+      .where(eq(suggestionsTable.id, id))
+      .limit(1);
+
+    if (!suggestion) {
+      res.status(404).json({ error: "Suggestion not found" });
+      return;
+    }
+
+    if (suggestion.status !== "ACTIVE" && suggestion.status !== "PENDING") {
+      res
+        .status(409)
+        .json({ error: `Cannot modify suggestion with status ${suggestion.status}` });
+      return;
+    }
+
+    const { target1 } = parsed.data;
+    // Direction sanity: a BUY target at/below entry (or SELL at/above) would be
+    // instantly "hit" and books a fake win.
+    const entry = parseFloat(suggestion.entryPrice);
+    if (suggestion.direction === "BUY" ? target1 <= entry : target1 >= entry) {
+      res.status(400).json({
+        error: `Invalid target1 for ${suggestion.direction}: must be ${suggestion.direction === "BUY" ? "above" : "below"} entry price ${entry.toFixed(2)}`,
+      });
+      return;
+    }
+    const updated = await db
+      .update(suggestionsTable)
+      .set({ target1: target1.toFixed(2) })
+      .where(and(eq(suggestionsTable.id, id), inArray(suggestionsTable.status, ["ACTIVE", "PENDING"])))
+      .returning({ id: suggestionsTable.id });
+    if (updated.length === 0) {
+      res.status(409).json({ error: "Suggestion status changed concurrently; target not modified" });
+      return;
+    }
+    res.json({ success: true });
+    broadcast(createServerEvent.suggestionUpdated({ id, status: suggestion.status }), "suggestions");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (err: any) {
+    logApiError(req, err);
+    res.status(500).json({ error: "Failed to modify target" });
+  }
+});
+
+// POST /api/suggestions
+router.post("/suggestions", async (req, res) => {
+  try {
+    const parsed = CreateSuggestionBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid request body", details: parsed.error.format() });
+      return;
+    }
+
+    const { symbol, direction, entryPrice, stopLoss, target1, quantity, status } = parsed.data;
+
+    const entry = entryPrice;
+    const stop = stopLoss;
+    const target = target1;
+    const qty = quantity;
+    
+    const risk = Math.abs(entry - stop);
+    const reward = Math.abs(target - entry);
+    const rr = risk > 0 ? reward / risk : 0;
+
+    const [inserted] = await db
+      .insert(suggestionsTable)
+      .values({
+        symbol: symbol.toUpperCase(),
+        name: symbol.toUpperCase(),
+        exchange: "NSE",
+        direction,
+        tradeType: "INTRADAY",
+        setupType: "MANUAL",
+        entryPrice: entry.toFixed(2),
+        stopLoss: stop.toFixed(2),
+        target1: target.toFixed(2),
+        riskReward: rr.toFixed(2),
+        quantity: qty,
+        status,
+        reasoning: "Manually entered order via terminal ticket.",
+      })
+      .returning();
+
+    if (inserted) {
+      req.log.info({
+        id: inserted.id,
+        symbol: inserted.symbol,
+        setupType: inserted.setupType,
+        direction: inserted.direction,
+        entryPrice: inserted.entryPrice
+      }, "Database write: manual suggestion inserted");
+    }
+
+    // Broadcast updates via websocket
+    
+    if (status === "PENDING") {
+      const serialized = serializeSuggestion(inserted);
+      broadcast(
+        createServerEvent.newSuggestion({
+          id: serialized.id,
+          symbol: serialized.symbol,
+          direction: serialized.direction as "BUY" | "SELL",
+          entryPrice: serialized.entryPrice,
+          stopLoss: serialized.stopLoss,
+          target1: serialized.target1,
+          setupType: serialized.setupType,
+          riskReward: serialized.riskReward ?? 0,
+        }),
+        "suggestions",
+      );
+    } else {
+      broadcast(createServerEvent.positionUpdate({
+        id: inserted.id,
+        symbol: inserted.symbol,
+        entryPrice: entry,
+        stopLoss: stop,
+        target1: target,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        direction: direction as any,
+        mode: "MANUAL"
+        // "suggestions" — no client subscribes to a "positions" topic; the old
+        // channel meant manual-order updates were silently dropped.
+      }), "suggestions");
+    }
+
+    res.json(serializeSuggestion(inserted));
+  } catch (err) {
+    req.log.error({ err }, "Failed to create manual order");
+    res.status(500).json({ error: "Failed to create order" });
+  }
+});
+
+export default router;

@@ -1,0 +1,929 @@
+@import 'tailwindcss';
+@plugin "../../node_modules/@tailwindcss/typography";
+@import '@xterm/xterm/css/xterm.css';
+
+/*
+  Design system: regions are separated by background luminance only.
+  There is no `border` and no `box-shadow` used as a container outline anywhere
+  in this file or in any component. Dividers are gradients that fade out at both
+  ends (.divider-x / .divider-y). Focus is shown with an accent edge, not a ring.
+*/
+
+:root {
+  --bg-0: #000000;
+  --bg-1: #09090b;
+  --bg-2: #121214;
+
+  --fg-0: #ffffff;
+  --fg-1: #a1a1aa;
+  --fg-2: #71717a;
+
+  --accent: #3b82f6;
+  --accent-soft: #3b82f626;
+
+  --ok: #10b981;
+  --warn: #f59e0b;
+  --bad: #ef4444;
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', 'Cascadia Mono', Consolas, ui-monospace,
+    SFMono-Regular, Menlo, monospace;
+
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --dur: 200ms;
+}
+
+html[data-accent='green'] {
+  --accent: #10b981;
+  --accent-soft: #10b98126;
+}
+html[data-accent='amber'] {
+  --accent: #f59e0b;
+  --accent-soft: #f59e0b26;
+}
+html[data-accent='cyan'] {
+  --accent: #06b6d4;
+  --accent-soft: #06b6d426;
+}
+html[data-accent='violet'] {
+  --accent: #a855f7;
+  --accent-soft: #a855f726;
+}
+
+html[data-font='geist'] {
+  --font-sans: 'Geist', 'Geist Mono', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', monospace;
+}
+html[data-font='inter'] {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+html[data-font='system'] {
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  border: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: transparent;
+  color: var(--fg-0);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  cursor: default;
+  user-select: none;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  outline: none;
+  user-select: text;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--fg-2);
+}
+
+button, input, textarea, a, select, div {
+  outline: none !important;
+}
+
+*:focus, *:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  outline: none !important;
+}
+
+::selection {
+  background: var(--accent);
+  color: #05050a;
+}
+
+/* dividers: invisible, used only for sizing/spacing or invisible split handles */
+.divider-x {
+  height: 1px;
+  flex: none;
+  background: transparent;
+}
+
+.divider-y {
+  width: 1px;
+  flex: none;
+  background: transparent;
+}
+
+/* thin, unobtrusive scrollbars */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #26262c;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #33333b;
+}
+
+
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* panel entrance: 150ms ease-out, no spring */
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.enter {
+  animation: fade-rise var(--dur) var(--ease);
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.overlay-in {
+  animation: overlay-in 120ms var(--ease);
+}
+
+/* xterm: transparent host, cursor blink handled by xterm at 530ms */
+.xterm .xterm-viewport {
+  background: transparent !important;
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+.xterm .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+.xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border: 2px solid var(--bg-0);
+  border-radius: 999px;
+}
+.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+.xterm {
+  padding: 8px 10px;
+}
+
+.mono-caps {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 10px;
+  color: var(--fg-2);
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+/* ─── Font Stack ────────────────────────────────────────────────────────────
+   Geist Sans       → Primary UI font (pixel-hinted, pairs with Geist Mono)
+   SF Pro           → Apple platforms override (loaded from system)
+   Geist Mono       → All numeric / tabular data (prices, P&L, scores)
+   ──────────────────────────────────────────────────────────────────────────── */
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-sans/700.css";
+@import "@fontsource/geist-mono/400.css";
+@import "@fontsource/geist-mono/500.css";
+@import "@fontsource/geist-mono/600.css";
+@import "@fontsource/geist-mono/700.css";
+
+@theme {
+  --font-sans: "Geist Sans", "Geist", system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", "SF Mono", ui-monospace, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-bull: #00e676;
+  --color-bear: #ff1744;
+  --color-surface: #0a0a0a;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #e5e5e5;
+    
+    --card: #0a0a0a;
+    --card-foreground: #e5e5e5;
+    
+    --popover: #171717;
+    --popover-foreground: #e5e5e5;
+    
+    --primary: #e5e5e5;
+    --primary-foreground: #0a0a0a;
+    
+    --secondary: #262626;
+    --secondary-foreground: #e5e5e5;
+    
+    --muted: #262626;
+    --muted-foreground: #a3a3a3;
+    
+    --accent: #262626;
+    --accent-foreground: #e5e5e5;
+    
+    --destructive: #ef4444;
+    --destructive-foreground: #e5e5e5;
+    
+    --border: #262626;
+    --input: #262626;
+    --ring: #e5e5e5;
+
+    --radius: 0.5rem;
+
+    --island-bg: #1a1a1a;
+    --island-text: #ffffff;
+  }
+
+  /* Prevent zoom on mobile devices */
+  * {
+    touch-action: pan-x pan-y;
+  }
+
+  html {
+    /* Prevent iOS zoom on input focus */
+    -webkit-text-size-adjust: 100%;
+    /* Prevent font boosting */
+    -moz-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    /* Prevent zoom gestures */
+    touch-action: pan-x pan-y;
+  }
+
+
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+    contain: paint;
+  }
+
+  body {
+    margin: 0;
+    @apply bg-background text-foreground font-sans;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* geometricPrecision gives sharper glyph outlines on Windows */
+    text-rendering: geometricPrecision;
+    /* Geist Sans reads cleanly at 0 tracking — no negative needed */
+    letter-spacing: 0;
+    /* Prevent browser from synthesizing bold/italic — looks terrible */
+    font-synthesis: none;
+    font-weight: 400;
+    line-height: 1.5;
+  }
+
+  /* Numeric data uses Geist Mono with tabular, lining figures so live-updating
+     prices and P&L never shift width as digits change — a core "crafted" detail.
+     Apply .font-mono (or the .tnum utility) to any number that ticks. */
+  .font-mono,
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum", "lnum", "zero";
+    letter-spacing: -0.01em;
+  }
+
+  /* Utility: tabular figures without forcing the mono family (for sans numbers
+     that still need to not jitter, e.g. inline counts). */
+  .tnum {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  /* Headings — Geist Sans looks sharp with tight tracking at display sizes */
+  h1 { letter-spacing: -0.03em; font-weight: 600; }
+  h2 { letter-spacing: -0.025em; font-weight: 600; }
+  h3 { letter-spacing: -0.02em; font-weight: 500; }
+  h4 { letter-spacing: -0.015em; font-weight: 500; }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-none {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+  
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  
+  button {
+    font-family: inherit;
+    cursor: pointer;
+    background: none;
+    border: none;
+    color: inherit;
+    outline: none;
+  }
+  
+  input {
+    font-family: inherit;
+    background: transparent;
+    border: none;
+    color: inherit;
+    outline: none;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    background: rgba(10, 10, 10, 0.7);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+  }
+
+
+  /* Lightweight bespoke micro-interactions for specific icons */
+  svg.lucide {
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.15s ease, opacity 0.15s ease;
+  }
+  
+  /* Generic press effect */
+  button:active svg.lucide,
+  a:active svg.lucide,
+  [role="button"]:active svg.lucide {
+    transform: scale(0.9);
+    transition-duration: 0.1s;
+  }
+
+  /* Specific Icon Hover Animations */
+  
+  /* Spinners */
+  button:hover .lucide-settings, button:hover .lucide-settings-2, 
+  button:hover .lucide-sun, button:hover .lucide-loader-2 {
+    animation: icon-spin 2s linear infinite;
+  }
+  button:hover .lucide-history, button:hover .lucide-rotate-ccw {
+    animation: icon-spin-reverse 2s linear infinite;
+  }
+  
+  /* Bouncers & Shakers */
+  button:hover .lucide-bell, button:hover .lucide-alert-circle {
+    animation: icon-wiggle 0.5s ease-in-out infinite;
+  }
+  button:hover .lucide-trash-2, button:hover .lucide-trash {
+    animation: icon-shake 0.4s ease-in-out;
+  }
+  
+  /* Heartbeat / Activity */
+  button:hover .lucide-activity, button:hover .lucide-zap {
+    animation: icon-heartbeat 0.8s ease-in-out infinite;
+  }
+  
+  /* Directional */
+  button:hover .lucide-arrow-right, button:hover .lucide-chevron-right {
+    transform: translateX(3px);
+  }
+  button:hover .lucide-arrow-left, button:hover .lucide-chevron-left {
+    transform: translateX(-3px);
+  }
+  button:hover .lucide-trending-up, button:hover .lucide-arrow-up-right {
+    transform: translate(2px, -2px);
+  }
+  button:hover .lucide-trending-down, button:hover .lucide-arrow-down-right {
+    transform: translate(2px, 2px);
+  }
+  
+  /* Rotators */
+  button:hover .lucide-plus, button:hover .lucide-x {
+    transform: rotate(90deg);
+  }
+  button:hover .lucide-moon, button:hover .lucide-key, button:hover .lucide-key-round {
+    transform: rotate(-12deg);
+  }
+
+  /* Pop / Scale */
+  button:hover .lucide-play, button:hover .lucide-target, button:hover .lucide-check-circle, button:hover .lucide-check-circle-2, button:hover .lucide-wallet {
+    transform: scale(1.08);
+  }
+
+  /* Sparkles */
+  button:hover .lucide-sparkles, button:hover .lucide-flame {
+    animation: icon-flicker 0.6s ease-in-out infinite;
+  }
+}
+
+@keyframes icon-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes skeleton-shimmer {
+  100% { transform: translateX(100%); }
+}
+@keyframes icon-spin-reverse {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-360deg); }
+}
+@keyframes icon-wiggle {
+  0%, 100% { transform: rotate(-10deg); }
+  50% { transform: rotate(10deg); }
+}
+@keyframes icon-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px) rotate(-5deg); }
+  75% { transform: translateX(2px) rotate(5deg); }
+}
+@keyframes icon-heartbeat {
+  0%, 100% { transform: scale(1); }
+  25% { transform: scale(1.15); }
+  50% { transform: scale(1); }
+  75% { transform: scale(1.15); }
+}
+@keyframes icon-flicker {
+  0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
+  50% { transform: scale(1.1) rotate(5deg); opacity: 0.8; }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+/* Status-LED breathe — compositor-only (opacity), replaces per-LED framer loops */
+@keyframes led-breathe {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.animate-led-breathe {
+  animation: led-breathe 3s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Custom visible scrollbar for specific areas */
+.terminal-scrollbar::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+  height: 6px;
+}
+.terminal-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.terminal-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+.terminal-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+::view-transition-group(root) {
+  animation: none;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+  display: block;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 9999;
+}
+@layer base {
+  html.light {
+    --background: #ffffff;
+    --foreground: #000000;
+    --card: #ffffff;
+    --card-foreground: #000000;
+    --popover: #ffffff;
+    --popover-foreground: #000000;
+    --primary: #000000;
+    --primary-foreground: #ffffff;
+    --secondary: #e4e4e7;
+    --secondary-foreground: #000000;
+    --muted: #f4f4f5;
+    --muted-foreground: #52525b;
+    --accent: #e4e4e7;
+    --accent-foreground: #000000;
+    --destructive: #ef4444;
+    --destructive-foreground: #fafaf9;
+    --border: #d4d4d8;
+    --input: #e4e4e7;
+    --ring: #000000;
+    
+    --island-bg: #ffffff;
+    --island-text: #000000;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Apple-Inspired Animation System
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --apple-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --apple-ease-out: cubic-bezier(0, 0, 0.58, 1);
+  --apple-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --apple-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Breathe — subtle idle "alive" pulse */
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.005); opacity: 0.97; }
+}
+
+/* Slide up with fade — content entry */
+@keyframes slide-up-fade {
+  from { transform: translateY(6px); opacity: 0; filter: blur(2px); }
+  to { transform: translateY(0); opacity: 1; filter: blur(0px); }
+}
+
+/* Scale in — card/modal entry */
+@keyframes scale-in {
+  from { transform: scale(0.97); opacity: 0; filter: blur(3px); }
+  to { transform: scale(1); opacity: 1; filter: blur(0px); }
+}
+
+/* Shimmer — loading skeleton */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-breathe {
+  animation: breathe 4s var(--apple-ease) infinite;
+}
+
+.animate-slide-up-fade {
+  animation: slide-up-fade 0.35s var(--apple-ease) both;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.3s var(--apple-spring) both;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent 0%, var(--border) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.8s var(--apple-ease) infinite;
+}
+
+/* Apple-style hover interaction */
+.apple-hover {
+  transition:
+    transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    background-color 0.2s ease,
+    opacity 0.15s ease;
+  will-change: transform;
+}
+
+.apple-hover:hover {
+  transform: scale(1.02);
+}
+
+.apple-hover:active {
+  transform: scale(0.97);
+  transition-duration: 0.08s;
+}
+
+/* Smooth color/background transitions */
+.apple-transition {
+  transition: all 0.3s var(--apple-ease);
+}
+
+/* Reduced motion — respect user preferences */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .animate-breathe,
+  .animate-slide-up-fade,
+  .animate-scale-in,
+  .animate-shimmer {
+    animation: none !important;
+  }
+}
+
+@layer utilities {
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+::-webkit-scrollbar {
+  display: none;
+}
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* ─── LivePrice tick flash animations (ONLY TEXT COLOR, NO BOX AROUND THEM) ──────────────── */
+@keyframes flash-green {
+  0%   { 
+    color: #22c55e !important; 
+    text-shadow: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  100% { 
+    color: inherit; 
+    text-shadow: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+}
+@keyframes flash-red {
+  0%   { 
+    color: #ef4444 !important; 
+    text-shadow: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  100% { 
+    color: inherit; 
+    text-shadow: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+}
+.flash-up {
+  animation: flash-green 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
+}
+.flash-down {
+  animation: flash-red 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
+}
+
+/* Pulse animation for active live elements */
+@keyframes live-pulse {
+  0%, 100% { 
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+  }
+  50% { 
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0);
+  }
+}
+
+.live-indicator {
+  animation: live-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ─── Apple Dynamic Island Confirmation Mark Animations ─────────────────────────── */
+.confirmation-mark {
+  position: relative;
+  width: 77px;
+  height: 77px;
+  filter: drop-shadow(0 0 8px rgba(117, 237, 124, 0.25));
+}
+
+.confirmation-ring {
+  stroke: #8cf58d;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 246;
+  stroke-dashoffset: 246;
+}
+
+.confirmation-check {
+  stroke: #8cf58d;
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 62;
+  stroke-dashoffset: 62;
+}
+
+.dynamic-island--active .confirmation-ring {
+  animation: draw-ring 680ms cubic-bezier(0.22, 1, 0.36, 1) 100ms forwards;
+}
+
+.dynamic-island--active .confirmation-check {
+  animation: draw-check 420ms cubic-bezier(0.22, 1, 0.36, 1) 590ms forwards;
+}
+
+.dynamic-island--active .confirmation-mark {
+  animation: confirmation-pop 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes draw-ring {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes draw-check {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes confirmation-pop {
+  0% { transform: scale(0.72); opacity: 0; }
+  42% { transform: scale(1.06); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dynamic-island--active .confirmation-ring,
+  .dynamic-island--active .confirmation-check,
+  .dynamic-island--active .confirmation-mark {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Global Input Reset & Customization (Hide Browser Defaults)
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Hide number input spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield; /* Firefox */
+  appearance: textfield;
+}
+
+/* Hide search input cancel buttons and styling */
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+}
+
+/* Hide native date/time pickers */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator {
+  display: none;
+  -webkit-appearance: none;
+}
+
+/* Hide default select dropdown arrows */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+/* Override browser autofill styles for light/dark mode compatibility */
+input:-webkit-autofill,
+input:-webkit-autofill:hover, 
+input:-webkit-autofill:focus, 
+input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 30px var(--background) inset !important;
+    -webkit-text-fill-color: var(--foreground) !important;
+    transition: background-color 5000s ease-in-out 0s;
+}
+

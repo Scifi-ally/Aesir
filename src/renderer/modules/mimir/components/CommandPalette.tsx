@@ -1,0 +1,419 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Command } from 'cmdk';
+import { useDebounce } from "@/modules/mimir/hooks/useDebounce";
+import { useStore } from "@/modules/mimir/store/useStore";
+import { api } from "@/modules/mimir/lib/api";
+import { motion, AnimatePresence } from 'framer-motion';
+import { Search, Plus, Filter } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { AdvancedRuleBuilder } from './AdvancedRuleBuilder';
+import type { SymbolSearchResult } from "@/modules/mimir/types/api";
+import { FADE_FAST, FADE_STANDARD } from "@/modules/mimir/lib/motion";
+import { Skeleton } from "@/modules/mimir/components/atoms/Skeleton";
+
+type ScreenerRule = {
+  id: number;
+  targetType: string;
+  outputName?: string | null;
+};
+
+export function CommandPalette({ onClose, onWidthChange }: { onClose: () => void, onWidthChange?: (width: number) => void }) {
+  const initialSearch = useStore((s) => s.commandPaletteSearch);
+  const initialTargetWatchlist = useStore((s) => s.commandPaletteTargetWatchlist);
+  const initialEditRuleId = useStore((s) => s.commandPaletteEditRuleId);
+  const [search, setSearch] = useState(initialSearch || '');
+  const debouncedSearch = useDebounce(search, 300);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Cancel any pending close-timer from a previous open/close cycle
+  useEffect(() => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, symbol: string } | null>(null);
+
+  // The context menu previously had no dismissal path besides picking an item —
+  // Escape and any click outside now close it.
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [contextMenu]);
+  const [targetWatchlist, setTargetWatchlist] = useState<number | string | null>(initialTargetWatchlist);
+  
+  // Rule builder state
+  const [isBuildingRule, setIsBuildingRule] = useState(!!initialEditRuleId || (initialSearch ? initialSearch.toLowerCase().startsWith('scan ') : false));
+  
+  const queryClient = useQueryClient();
+  const setSelectedSymbol = useStore((s) => s.setSelectedSymbol);
+  const showIsland = useStore((s) => s.showIsland);
+
+  const { data: screeners = [] } = useQuery<ScreenerRule[]>({
+    queryKey: ["screener_rules"],
+    queryFn: () => api.screener.list() as Promise<ScreenerRule[]>,
+  });
+  const customWatchlists = screeners.filter((s) => s.targetType === 'CUSTOM');
+  const editRule = useMemo(() => {
+    if (!initialEditRuleId) return undefined;
+    return screeners.find(s => s.id === initialEditRuleId);
+  }, [initialEditRuleId, screeners]);
+
+  const batchSymbols = useMemo(() => {
+    if (targetWatchlist === null || !search.includes(',')) return [];
+    return Array.from(
+      new Set(
+        search
+          .split(',')
+          .map((symbol) => symbol.trim().toUpperCase())
+          .filter(Boolean)
+      )
+    );
+  }, [search, targetWatchlist]);
+
+  const createTargetMutation = useMutation({
+    mutationFn: ({ symbol, screenerId }: { symbol: string, screenerId?: number }) =>
+      api.screener.addTarget({ symbol, screenerId }),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["screener_targets"] });
+      queryClient.invalidateQueries({ queryKey: ["screener_matches"] });
+      queryClient.invalidateQueries({ queryKey: ["watchlist"] });
+      setContextMenu(null);
+      showIsland({ title: `${vars.symbol} added`, showSuccessOnly: true, hideCancel: true });
+    },
+    onError: (err, vars) => {
+      setContextMenu(null);
+      showIsland({ isNotification: true, title: `Couldn't add ${vars.symbol}`, subtitle: err.message, showSuccessOnly: false });
+    }
+  });
+
+  const createTargetsMutation = useMutation({
+    mutationFn: ({ symbols, screenerId }: { symbols: string[], screenerId: number }) =>
+      Promise.all(symbols.map((symbol) => api.screener.addTarget({ symbol, screenerId }))),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["screener_targets"] });
+      queryClient.invalidateQueries({ queryKey: ["screener_matches"] });
+      queryClient.invalidateQueries({ queryKey: ["watchlist"] });
+      setContextMenu(null);
+      showIsland({ title: `${vars.symbols.length} stock${vars.symbols.length === 1 ? "" : "s"} added`, showSuccessOnly: true, hideCancel: true });
+    },
+    onError: (err) => {
+      setContextMenu(null);
+      showIsland({ isNotification: true, title: "Couldn't add stocks", subtitle: err instanceof Error ? err.message : "Add failed", showSuccessOnly: false });
+    }
+  });
+
+  const addCustomWatchlistMutation = useMutation({
+    mutationFn: async (symbol: string) => api.addCustomWatchlist(symbol),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["customWatchlist"] });
+      queryClient.invalidateQueries({ queryKey: ["watchlist"] });
+      setContextMenu(null);
+      showIsland({ title: `${vars} added`, showSuccessOnly: true, hideCancel: true });
+    },
+    onError: (err, vars) => {
+      setContextMenu(null);
+      showIsland({ isNotification: true, title: `Couldn't add ${vars}`, subtitle: err.message, showSuccessOnly: false });
+    }
+  });
+
+  const addCustomWatchlistBatchMutation = useMutation({
+    mutationFn: async (symbols: string[]) => {
+      return Promise.all(
+        symbols.map(async (symbol) => api.addCustomWatchlist(symbol))
+      );
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["customWatchlist"] });
+      queryClient.invalidateQueries({ queryKey: ["watchlist"] });
+      setContextMenu(null);
+      showIsland({ title: `${vars.length} stock${vars.length === 1 ? "" : "s"} added`, showSuccessOnly: true, hideCancel: true });
+    },
+    onError: (err) => {
+      setContextMenu(null);
+      showIsland({ isNotification: true, title: "Couldn't add stocks", subtitle: err instanceof Error ? err.message : "Add failed", showSuccessOnly: false });
+    }
+  });
+
+  const handleClose = () => {
+    onClose();
+    // Delay resetting internal state until the unmount animation completely finishes
+    closeTimerRef.current = setTimeout(() => {
+      setSearch('');
+      setIsBuildingRule(false);
+      setTargetWatchlist(null);
+    }, 400);
+  };
+
+  useEffect(() => {
+    if (isBuildingRule) {
+      onWidthChange?.(650);
+    } else if (targetWatchlist === "CUSTOM") {
+      setIsBuildingRule(false);
+      onWidthChange?.(650);
+    } else if (search.length === 0) {
+      setIsBuildingRule(false);
+      onWidthChange?.(650);
+    }
+  }, [isBuildingRule, search, targetWatchlist, onWidthChange]);
+
+  useEffect(() => {
+    setTargetWatchlist(initialTargetWatchlist);
+  }, [initialTargetWatchlist]);
+
+  // A "scan" prefix routes to the rule builder, not symbol search — so the query
+  // is disabled for it. A disabled query stays `isPending` forever, so the
+  // skeleton must gate on this same flag or it renders indefinitely (e.g. typing
+  // "s", "sc", "sca", "scan").
+  const searchEnabled =
+    debouncedSearch.length > 0 &&
+    batchSymbols.length === 0 &&
+    !debouncedSearch.toLowerCase().startsWith('scan') &&
+    !("scan".startsWith(debouncedSearch.toLowerCase()));
+
+  const { data: searchResults, isFetching, error } = useQuery({
+    queryKey: ['searchSymbols', debouncedSearch],
+    queryFn: () => api.searchSymbols(debouncedSearch, 40),
+    enabled: searchEnabled,
+    placeholderData: keepPreviousData,
+  });
+
+  // Only a genuinely in-flight, enabled query should show the skeleton. With
+  // keepPreviousData the prior results stay visible while the next set loads,
+  // so the list no longer collapses to skeletons on every keystroke.
+  const showSearchSkeleton = searchEnabled && isFetching && !searchResults;
+
+  const handleSelectSymbol = (symbol: string) => {
+    if (targetWatchlist === "CUSTOM") {
+      addCustomWatchlistMutation.mutate(symbol);
+      handleClose();
+    } else if (targetWatchlist !== null) {
+      createTargetMutation.mutate({ symbol, screenerId: targetWatchlist as number });
+      handleClose();
+    } else {
+      setSelectedSymbol(symbol);
+      handleClose();
+    }
+  };
+
+  const handleAddBatchSymbols = async () => {
+    if (targetWatchlist === null || batchSymbols.length === 0) return;
+    try {
+      if (targetWatchlist === "CUSTOM") {
+        await addCustomWatchlistBatchMutation.mutateAsync(batchSymbols);
+      } else {
+        await createTargetsMutation.mutateAsync({ symbols: batchSymbols, screenerId: targetWatchlist as number });
+      }
+      handleClose();
+    } catch {
+      // Feedback is surfaced by each mutation's onError; keep the palette open
+      // so the user can retry rather than closing on a silent failure.
+    }
+  };
+
+  return (
+    <>
+      <AnimatePresence>
+        {contextMenu && (
+          <>
+          {/* Invisible scrim: clicking anywhere off the menu dismisses it. */}
+          <div className="fixed inset-0 z-[119]" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }} />
+          <motion.div
+            initial={{ opacity: 0, backdropFilter: 'blur(0px)' }}
+            animate={{ opacity: 1, backdropFilter: 'blur(12px)' }}
+            exit={{ opacity: 0, backdropFilter: 'blur(0px)' }}
+            transition={FADE_STANDARD}
+            style={{
+              // Clamp so the menu never opens off-screen near the right/bottom edges.
+              top: Math.min(contextMenu.y, (typeof window !== "undefined" ? window.innerHeight : 800) - 220),
+              left: Math.min(contextMenu.x, (typeof window !== "undefined" ? window.innerWidth : 1200) - 220),
+            }}
+            role="menu"
+            className="fixed z-[120] min-w-[200px] rounded-xl border border-border/20 bg-background/95 p-1.5 shadow-2xl backdrop-blur-md"
+          >
+            <div className="px-2 py-1.5 text-xs font-normal text-muted-foreground uppercase tracking-wider mb-1">
+              {contextMenu.symbol}
+            </div>
+            <div className="px-2 py-1 text-xs text-foreground/70 mb-1">
+              Add to:
+            </div>
+            {customWatchlists.length > 0 ? (
+              customWatchlists.map((wl) => (
+                <button
+                  key={wl.id}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    createTargetMutation.mutate({ symbol: contextMenu.symbol, screenerId: wl.id });
+                  }}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm text-foreground hover:bg-primary/20 hover:text-primary transition-colors text-left"
+                >
+                  <Plus className="h-4 w-4" />
+                  {wl.outputName || "Unnamed Watchlist"}
+                </button>
+              ))
+            ) : (
+              <div className="px-2 py-1 text-xs text-foreground/50 italic">No custom watchlists</div>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setSearch('scan ');
+                setIsBuildingRule(true);
+                setContextMenu(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm text-foreground hover:bg-primary/20 hover:text-primary transition-colors text-left"
+            >
+              <Filter className="h-4 w-4" />
+              + Create New Watchlist
+            </button>
+          </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      <Command
+        className="flex flex-col w-full bg-transparent"
+        shouldFilter={false}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            handleClose();
+          }
+        }}
+      >
+          {!isBuildingRule ? (
+            <div className="flex items-center px-4 py-2.5 relative">
+              <Search className="mr-3 h-4 w-4 shrink-0 text-foreground/50" />
+              <Command.Input
+                id="command-palette-input"
+                name="command-palette-input"
+                aria-label="Search symbols"
+                autoFocus
+                placeholder={targetWatchlist === "CUSTOM" ? "Add symbol..." : targetWatchlist !== null ? "Search or add comma-separated symbols..." : "Search symbols..."}
+                value={search}
+                onValueChange={setSearch}
+                className="flex h-10 w-full bg-transparent text-[15px] font-normal text-foreground outline-none placeholder:text-foreground/30 placeholder:font-normal disabled:cursor-not-allowed disabled:opacity-50 focus:text-primary transition-colors"
+              />
+              {batchSymbols.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleAddBatchSymbols}
+                  disabled={createTargetsMutation.isPending || addCustomWatchlistBatchMutation.isPending}
+                  className="ml-3 flex shrink-0 items-center gap-1.5 rounded-full bg-foreground/10 px-4 py-1.5 text-xs font-normal text-foreground transition-colors hover:bg-foreground/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {(createTargetsMutation.isPending || addCustomWatchlistBatchMutation.isPending) ? <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <Plus className="h-3.5 w-3.5" />}
+                  {(createTargetsMutation.isPending || addCustomWatchlistBatchMutation.isPending) ? "Adding..." : "Add Stocks"}
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center px-4 pt-4 pb-1.5 text-center">
+              <div className="flex items-center justify-center">
+                <span className="text-xs font-normal tracking-tight text-foreground">Screener Rule Builder</span>
+              </div>
+            </div>
+          )}
+
+          {isBuildingRule ? (
+            <motion.div
+              layout
+              key="rule-builder"
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={FADE_FAST}
+            >
+              <AdvancedRuleBuilder initialRule={editRule} onComplete={() => {
+                setIsBuildingRule(false);
+                setSearch('');
+              }} />
+            </motion.div>
+          ) : (
+            <Command.List 
+              className={`overflow-y-auto overflow-x-hidden scrollbar-none will-change-[height] ${searchResults?.items?.length ? 'p-2' : ''}`}
+              style={{ 
+                height: 'var(--cmdk-list-height)', 
+                minHeight: 0, 
+                maxHeight: 400,
+                transition: 'height 0.5s cubic-bezier(0.32, 0.72, 0, 1)'
+              }}
+            >
+              <Command.Empty className="hidden" />
+
+              {showSearchSkeleton && (
+                <div className="flex flex-col gap-1 p-2">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div key={i} className="flex items-center gap-3 px-3 py-2.5 rounded-lg">
+                      <Skeleton className="h-7 w-7 rounded-md shrink-0" />
+                      <div className="flex-1 flex flex-col gap-1.5 min-w-0">
+                        <Skeleton className="h-3 w-24" />
+                        <Skeleton className="h-2.5 w-40" />
+                      </div>
+                      <Skeleton className="h-3 w-12 shrink-0" />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {error && (
+                <div className="py-4 text-center text-sm text-destructive px-2">
+                  {error instanceof Error ? error.message : "Failed to search symbols"}
+                </div>
+              )}
+
+              {createTargetsMutation.error && (
+                <div className="py-4 text-center text-sm text-destructive px-2">
+                  {createTargetsMutation.error instanceof Error ? createTargetsMutation.error.message : "Failed to add stocks"}
+                </div>
+              )}
+
+              {batchSymbols.length > 0 && (
+                <div className="px-4 pb-3 text-xs text-muted-foreground">
+                  Ready to add {batchSymbols.length} symbol{batchSymbols.length === 1 ? "" : "s"}: {batchSymbols.join(", ")}
+                </div>
+              )}
+
+              {!showSearchSkeleton && !error && searchEnabled && searchResults?.items?.length === 0 && (
+                <div className="py-6 text-center text-sm text-muted-foreground">
+                  No symbols found for "{search}"
+                </div>
+              )}
+
+              {searchResults?.items && searchResults.items.length > 0 && (
+                <Command.Group heading="Symbols" className="px-2 pt-2 text-[10px] font-medium font-sans tracking-[0.12em] text-foreground/35 uppercase">
+                  {searchResults.items.map((item: SymbolSearchResult) => {
+                    return (
+                      <Command.Item
+                        key={item.symbol}
+                        onSelect={() => handleSelectSymbol(item.symbol)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setContextMenu({ x: e.clientX, y: e.clientY, symbol: item.symbol });
+                        }}
+                        className="apple-hover flex cursor-pointer select-none items-center justify-between rounded-xl px-3 py-2.5 text-sm outline-none hover:bg-foreground/10 aria-selected:bg-foreground/10 aria-selected:text-foreground data-[selected=true]:bg-foreground/10 data-[selected=true]:text-foreground mt-1 transition-all duration-200"
+                      >
+                        <div className="flex flex-1 items-center gap-3 min-w-0 mr-3">
+                          <span className="font-medium text-foreground font-mono tracking-tight shrink-0">{item.symbol}</span>
+                          <span className="text-foreground/40 truncate text-xs font-sans">{item.name}</span>
+                        </div>
+                        {item.sector && (
+                          <span className="text-[10px] uppercase tracking-[0.1em] font-medium font-sans text-foreground/25 shrink-0 rounded-full px-2 py-0.5 bg-foreground/5">{item.sector}</span>
+                        )}
+                      </Command.Item>
+                    );
+                  })}
+                </Command.Group>
+              )}
+            </Command.List>
+          )}
+        </Command>
+    </>
+  );
+}

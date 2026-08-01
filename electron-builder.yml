@@ -1,0 +1,29 @@
+appId: dev.devhub.app
+productName: DevHub
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  # @lydell/node-pty ships prebuilt .node binaries + the conpty helper exes;
+  # they must stay on disk outside the asar archive to be spawnable.
+  - '**/node_modules/@lydell/node-pty*/**'
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  darkModeSupport: true
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+linux:
+  target:
+    - AppImage
+  category: Development
