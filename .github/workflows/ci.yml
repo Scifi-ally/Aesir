@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Install desktop dependencies
+        run: npm ci
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Typecheck desktop application
+        run: npm run typecheck
+
+      - name: Build desktop application
+        run: npm run build
+
+      - name: Typecheck backend
+        working-directory: backend
+        run: npm run typecheck
+
+      - name: Test backend
+        working-directory: backend
+        run: npm test -- --reporter=dot
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
