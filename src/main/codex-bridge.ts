@@ -344,7 +344,7 @@ export async function runCodexCliStream(
 
   if (!bin) {
     const installCmd = getCodexInstallCommand().display
-    const notFoundText = `⚠️ **Codex CLI Not Found**\n\nCodex CLI is not installed on system PATH.\nRun the official installer in terminal:\n\`\`\`bash\n${installCmd}\n\`\`\``
+    const notFoundText = `**Codex CLI Not Found**\n\nCodex CLI is not installed on system PATH.\nRun the official installer in terminal:\n\`\`\`bash\n${installCmd}\n\`\`\``
     saveAgentTurn({
       id: assistantTurnId,
       sessionId: currentSessionId,
