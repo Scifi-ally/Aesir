@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild';
-import esbuildPluginPino from 'esbuild-plugin-pino';
+
 import { createRequire } from 'module';
 globalThis.require = createRequire(import.meta.url);
 
@@ -28,7 +28,7 @@ const options = {
     'msgpackr', 'node-cron', 'pg', 'pino', 'pino-http', 'protobufjs', 
     'upstox-js-sdk', 'ws', 'yahoo-finance2', 'zod', 'playwright', 'playwright-core'
   ],
-  plugins: [esbuildPluginPino({ transports: ['pino-pretty'] })],
+  
 };
 
 esbuild.build(options).catch((err) => {

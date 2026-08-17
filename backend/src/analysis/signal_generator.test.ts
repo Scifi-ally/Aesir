@@ -43,7 +43,7 @@ vi.mock('./mtf_filter', () => ({
 }));
 
 vi.mock('../config', () => ({
-  getConfig: vi.fn(() => ({ minAutoConfidencePct: 60, strictRegimeGate: false }))
+  getConfig: vi.fn(() => ({ minAutoConfidencePct: 60, strictRegimeGate: false, slippageBps: 5 }))
 }));
 
 vi.mock('./feature_engine', () => ({
