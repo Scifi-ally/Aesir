@@ -26,7 +26,7 @@ export default function Settings(): React.JSX.Element {
         id: `settings.${s.id}`,
         label: `Settings — ${s.label}`,
         group: 'settings',
-        glyph: '⚙',
+        glyph: 'settings',
         run: () => {
           setView({ kind: 'settings', section: s.id })
           setSection(s.id)

@@ -12,7 +12,11 @@ import {
   Send,
   GitPullRequest,
   Smile,
-  AlertCircle
+  AlertCircle,
+  ThumbsUp,
+  ThumbsDown,
+  Sparkles,
+  Rocket
 } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { GfmRenderer } from './GfmRenderer'
@@ -225,10 +229,10 @@ export function IssuesView({ owner, repo, defaultBranch }: IssuesViewProps): Rea
 
                 {/* Reaction Quick Picker */}
                 <div className="flex items-center gap-1">
-                  <button onClick={() => handleAddReaction(c.id, '+1')} className="px-1.5 py-0.5 hover:bg-[#30363d] rounded text-xs" title="Thumbs up">👍</button>
-                  <button onClick={() => handleAddReaction(c.id, '-1')} className="px-1.5 py-0.5 hover:bg-[#30363d] rounded text-xs" title="Thumbs down">👎</button>
-                  <button onClick={() => handleAddReaction(c.id, 'hooray')} className="px-1.5 py-0.5 hover:bg-[#30363d] rounded text-xs" title="Party">🎉</button>
-                  <button onClick={() => handleAddReaction(c.id, 'rocket')} className="px-1.5 py-0.5 hover:bg-[#30363d] rounded text-xs" title="Rocket">🚀</button>
+                  <button aria-label="Add thumbs-up reaction" onClick={() => handleAddReaction(c.id, '+1')} className="px-1.5 py-0.5 hover:bg-[#30363d] rounded text-xs" title="Thumbs up"><ThumbsUp size={14} aria-hidden="true" /></button>
+                  <button aria-label="Add thumbs-down reaction" onClick={() => handleAddReaction(c.id, '-1')} className="px-1.5 py-0.5 hover:bg-[#30363d] rounded text-xs" title="Thumbs down"><ThumbsDown size={14} aria-hidden="true" /></button>
+                  <button aria-label="Add celebration reaction" onClick={() => handleAddReaction(c.id, 'hooray')} className="px-1.5 py-0.5 hover:bg-[#30363d] rounded text-xs" title="Party"><Sparkles size={14} aria-hidden="true" /></button>
+                  <button aria-label="Add rocket reaction" onClick={() => handleAddReaction(c.id, 'rocket')} className="px-1.5 py-0.5 hover:bg-[#30363d] rounded text-xs" title="Rocket"><Rocket size={14} aria-hidden="true" /></button>
                 </div>
               </div>
               <div className="p-4">

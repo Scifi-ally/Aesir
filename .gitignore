@@ -1,14 +1,41 @@
+# Dependency directories
 node_modules/
+backend/node_modules/
+
+# Build and packaging output
 out/
 release/
 dist/
 .probe/
-*.log
-.DS_Store
 .portable/
 
+# Runtime and local state
+*.log
+*.db
+*.sqlite
+*.sqlite3
+backend/.cache/
+backend/data/
+backend/.env
+backend/.upstox_session.json
+backend/upstox_login*
+backend/*.png
+backend/eslint-*.json
+
+# Local research and scratch files
+scratch/
+*.tmp
+*.bak
+
+# Python environments and caches
 venv/
 .venv/
 __pycache__/
-backend/data/
+*.py[cod]
+.pytest_cache/
 backend/ai_service/venv/
+
+# IDE and operating-system files
+.DS_Store
+.vscode/*.local.json
+.idea/

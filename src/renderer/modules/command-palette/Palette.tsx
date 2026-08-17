@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, type PaletteAction } from '../../state'
+import { SvgIcon } from '../../components/SvgIcon'
 
 /** Subsequence match with a positional score; consecutive hits rank higher. */
 function fuzzy(query: string, text: string): { hit: boolean; score: number } {
@@ -54,14 +55,14 @@ export default function Palette(): React.JSX.Element | null {
   useEffect(() => window.devhub.palette.onOpen(() => setPaletteOpen(true)), [setPaletteOpen])
 
   const defaultNavActions: PaletteAction[] = useMemo(() => [
-    { id: 'nav.mimir', label: 'Go to Mimir Intelligence Dashboard', group: 'navigation', glyph: '📈', run: () => setView({ kind: 'agent', agentId: 'mimir' }) },
-    { id: 'nav.codex', label: 'Go to Codex Agent Workspace', group: 'navigation', glyph: '⚡', run: () => setView({ kind: 'agent', agentId: 'codex' }) },
-    { id: 'nav.claude', label: 'Go to Claude Code Workspace', group: 'navigation', glyph: '🟧', run: () => setView({ kind: 'agent', agentId: 'claude' }) },
-    { id: 'nav.antigravity', label: 'Go to Antigravity Workspace', group: 'navigation', glyph: '🔷', run: () => setView({ kind: 'agent', agentId: 'antigravity' }) },
-    { id: 'nav.github', label: 'Go to GitHub Hub', group: 'navigation', glyph: '🐙', run: () => setView({ kind: 'github' }) },
-    { id: 'nav.inbox', label: 'Go to Inbox & Mail Center', group: 'navigation', glyph: '✉️', run: () => setView({ kind: 'inbox' }) },
-    { id: 'nav.terminal', label: 'Go to Terminal Hub', group: 'navigation', glyph: '💻', run: () => setView({ kind: 'terminal' }) },
-    { id: 'nav.settings', label: 'Go to Application Settings', group: 'navigation', glyph: '⚙️', run: () => setView({ kind: 'settings' }) },
+    { id: 'nav.mimir', label: 'Go to Mimir Intelligence Dashboard', group: 'navigation', glyph: 'activity', run: () => setView({ kind: 'agent', agentId: 'mimir' }) },
+    { id: 'nav.codex', label: 'Go to Codex Agent Workspace', group: 'navigation', glyph: 'zap', run: () => setView({ kind: 'agent', agentId: 'codex' }) },
+    { id: 'nav.claude', label: 'Go to Claude Code Workspace', group: 'navigation', glyph: 'square', run: () => setView({ kind: 'agent', agentId: 'claude' }) },
+    { id: 'nav.antigravity', label: 'Go to Antigravity Workspace', group: 'navigation', glyph: 'diamond', run: () => setView({ kind: 'agent', agentId: 'antigravity' }) },
+    { id: 'nav.github', label: 'Go to GitHub Hub', group: 'navigation', glyph: 'github', run: () => setView({ kind: 'github' }) },
+    { id: 'nav.inbox', label: 'Go to Inbox & Mail Center', group: 'navigation', glyph: 'inbox', run: () => setView({ kind: 'inbox' }) },
+    { id: 'nav.terminal', label: 'Go to Terminal Hub', group: 'navigation', glyph: 'terminal', run: () => setView({ kind: 'terminal' }) },
+    { id: 'nav.settings', label: 'Go to Application Settings', group: 'navigation', glyph: 'settings', run: () => setView({ kind: 'settings' }) },
   ], [setView])
 
   const results = useMemo(() => {
@@ -158,7 +159,7 @@ export default function Palette(): React.JSX.Element | null {
                 }}
               >
                 <span className="w-[3ch] flex-none text-center" style={{ color: 'var(--fg-2)' }}>
-                  {a.glyph ?? '›'}
+                  <SvgIcon name={a.glyph ?? 'chevron-right'} />
                 </span>
                 <span className="truncate" style={{ color: i === index ? 'var(--fg-0)' : 'var(--fg-1)' }}>
                   {a.label}

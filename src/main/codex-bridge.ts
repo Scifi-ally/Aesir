@@ -462,7 +462,7 @@ export async function runCodexCliStream(
 
     proc.on('error', (err) => {
       activeProc = null
-      const errText = `\n\n❌ **Execution Error**: ${err.message}`
+      const errText = `\n\n**Execution Error**: ${err.message}`
       accumulatedText += errText
       saveAgentTurn({
         id: assistantTurnId,

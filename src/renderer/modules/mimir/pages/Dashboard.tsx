@@ -126,7 +126,7 @@ export default function Dashboard() {
       const fifteenMins = 15 * 60 * 1000;
       if (msLeft > 0 && msLeft < fifteenMins) {
         const mins = Math.ceil(msLeft / 60000);
-        showIsland({ isNotification: true, title: "Upstox Session Expiring", subtitle: `⚠️ Upstox session expires in ${mins} minutes. Re-authorize soon!`, showSuccessOnly: false });
+        showIsland({ isNotification: true, title: "Upstox Session Expiring", subtitle: `Warning: Upstox session expires in ${mins} minutes. Re-authorize soon!`, showSuccessOnly: false });
       }
     }
   }, [status?.upstoxTokenExpiry, showIsland]);

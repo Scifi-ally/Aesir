@@ -321,7 +321,7 @@ export default function TerminalHub(): React.JSX.Element {
         label: 'New terminal tab',
         hint: 'Ctrl+Shift+T',
         group: 'terminal',
-        glyph: '▊',
+        glyph: 'terminal',
         run: () => void newTab()
       },
       {
@@ -329,7 +329,7 @@ export default function TerminalHub(): React.JSX.Element {
         label: 'Split pane — side by side',
         hint: 'Ctrl+Shift+D',
         group: 'terminal',
-        glyph: '▊',
+        glyph: 'terminal',
         run: () => void split('h')
       },
       {
@@ -337,14 +337,14 @@ export default function TerminalHub(): React.JSX.Element {
         label: 'Split pane — stacked',
         hint: 'Ctrl+Shift+E',
         group: 'terminal',
-        glyph: '▊',
+        glyph: 'terminal',
         run: () => void split('v')
       },
       {
         id: 'term.cwd',
         label: 'Choose working directory',
         group: 'terminal',
-        glyph: '▊',
+        glyph: 'terminal',
         run: async () => {
           const dir = await window.devhub.app.pickDirectory()
           if (dir) setCwd(dir)
@@ -354,7 +354,7 @@ export default function TerminalHub(): React.JSX.Element {
         id: 'agents.refresh',
         label: 'Re-detect installed agents',
         group: 'agents',
-        glyph: '↻',
+        glyph: 'refresh',
         run: () => void refreshAgents(true)
       },
       ...agents
@@ -364,7 +364,7 @@ export default function TerminalHub(): React.JSX.Element {
           label: `Launch ${a.name}`,
           hint: cwd,
           group: 'agents',
-          glyph: '▶',
+          glyph: 'play',
           run: () => launchAgent(a)
         })),
       ...agents
@@ -373,7 +373,7 @@ export default function TerminalHub(): React.JSX.Element {
           id: `agents.app.${a.id}`,
           label: `Open ${a.name} desktop app`,
           group: 'agents',
-          glyph: '▶',
+          glyph: 'play',
           run: () =>
             void window.devhub.agents
               .launchApp(a.id)
@@ -387,7 +387,7 @@ export default function TerminalHub(): React.JSX.Element {
           label: `Edit ${a.name} config`,
           hint: a.configPath ?? undefined,
           group: 'agents',
-          glyph: '⚙',
+          glyph: 'settings',
           run: () => {
             setView({ kind: 'terminal' })
             setConfigAgent(a)
@@ -398,7 +398,7 @@ export default function TerminalHub(): React.JSX.Element {
         label: c.label,
         hint: c.argv.join(' '),
         group: 'commands',
-        glyph: '›',
+        glyph: 'chevron-right',
         run: () => void runSaved(c)
       }))
     ],

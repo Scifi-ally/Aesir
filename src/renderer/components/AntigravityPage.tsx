@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
-import { Check, ShieldAlert, Paperclip, Server, Square, ChevronDown, History, Plus, Clock, Trash2, Search, Folder, PanelRight, Zap, ArrowUp } from 'lucide-react'
+import { Check, ShieldAlert, Paperclip, Server, Square, ChevronDown, History, Plus, Clock, Trash2, Search, Folder, PanelRight, Zap, ArrowUp, Sparkles } from 'lucide-react'
 import { PremiumModelSelector, GenericModeToggle, WorkspaceSelector } from './ComposerComponents'
 import type { BridgeEvent } from '@shared/types'
 import { useApp } from '../state'
@@ -40,22 +40,19 @@ const VERBS = [
   "Contemplating", "Deciphering", "Synthesizing", "Puzzling", "Tinkering",
   "Wrangling", "Orchestrating", "Sketching", "Untangling", "Forging",
 ]
-const SPINNER_FRAMES = ["✶", "✻", "✽", "✢"]
 
 function ThinkingIndicator({ startedAt, tokenCount, doneSeconds }: {
   startedAt: number
   tokenCount: number
   doneSeconds?: number
 }) {
-  const [frame, setFrame] = useState(0)
   const [verb] = useState(() => VERBS[Math.floor(Math.random() * VERBS.length)])
   const [elapsed, setElapsed] = useState(0)
 
   useEffect(() => {
     if (doneSeconds != null) return
-    const spin = setInterval(() => setFrame(f => (f + 1) % SPINNER_FRAMES.length), 120)
     const tick = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000)
-    return () => { clearInterval(spin); clearInterval(tick); }
+    return () => clearInterval(tick)
   }, [startedAt, doneSeconds])
 
   const mm = Math.floor(elapsed / 60), ss = elapsed % 60
@@ -64,7 +61,7 @@ function ThinkingIndicator({ startedAt, tokenCount, doneSeconds }: {
   if (doneSeconds != null) {
     return (
       <div className="flex items-center gap-2 mt-2 font-mono text-[14px] text-[#71717a]">
-        <span className="inline-block w-4 text-center">✳</span>
+        <span className="inline-flex w-4 justify-center"><Check size={14} aria-hidden="true" /></span>
         <span>thought for {doneSeconds}s</span>
       </div>
     )
@@ -72,7 +69,7 @@ function ThinkingIndicator({ startedAt, tokenCount, doneSeconds }: {
 
   return (
     <div className="flex items-center gap-2 mt-2 font-mono text-[14px] text-[#4285f4]">
-      <span className="inline-block w-4 text-center">{SPINNER_FRAMES[frame]}</span>
+      <span className="inline-flex w-4 justify-center"><Sparkles size={14} className="animate-pulse" aria-hidden="true" /></span>
       <span>{verb}…</span>
       <span className="text-[#71717a]">
         (esc to interrupt · {elapsedStr})

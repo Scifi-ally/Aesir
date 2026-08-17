@@ -58,7 +58,7 @@ export default function Connectors(): React.JSX.Element {
                 id: `conn.test.${m.id}`,
                 label: `Test ${m.name} connection`,
                 group: 'connectors',
-                glyph: '↻',
+                glyph: 'refresh',
                 run: async () => {
                   const r = await window.devhub.connectors.test(m.id)
                   toast(

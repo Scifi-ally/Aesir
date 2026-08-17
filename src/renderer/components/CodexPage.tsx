@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { Check, Trash2, Folder, History, Plus, Search, Clock, ArrowUp, Zap, Square, Paperclip, ChevronDown, PanelRight, ShieldAlert } from 'lucide-react'
+import { Check, Trash2, Folder, History, Plus, Search, Clock, ArrowUp, Zap, Square, Paperclip, ChevronDown, PanelRight, ShieldAlert, Sparkles } from 'lucide-react'
 import { PremiumModelSelector, ReasoningSelector, GenericModeToggle, WorkspaceSelector } from './ComposerComponents'
 import type { BridgeEvent } from '@shared/types'
 import { useApp } from '../state'
@@ -48,18 +48,14 @@ const VERBS = [
   "Codex Processing", "Synthesizing", "Generating Code", "Analyzing Logic",
   "Refactoring", "Parsing AST", "Optimizing Flow", "Indexing Types"
 ]
-const SPINNER_FRAMES = ["✶", "✻", "✽", "✢"]
-
 function ThinkingIndicator({ startedAt, doneSeconds }: { startedAt: number; doneSeconds?: number }) {
-  const [frame, setFrame] = useState(0)
   const [verb] = useState(() => VERBS[Math.floor(Math.random() * VERBS.length)])
   const [elapsed, setElapsed] = useState(0)
 
   useEffect(() => {
     if (doneSeconds != null) return
-    const spin = setInterval(() => setFrame(f => (f + 1) % SPINNER_FRAMES.length), 120)
     const tick = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000)
-    return () => { clearInterval(spin); clearInterval(tick); }
+    return () => clearInterval(tick)
   }, [startedAt, doneSeconds])
 
   const mm = Math.floor(elapsed / 60), ss = elapsed % 60
@@ -68,7 +64,7 @@ function ThinkingIndicator({ startedAt, doneSeconds }: { startedAt: number; done
   if (doneSeconds != null) {
     return (
       <div className="flex items-center gap-2 mt-2 font-mono text-[14px] text-[#71717a]">
-        <span className="inline-block w-4 text-center">✳</span>
+        <span className="inline-flex w-4 justify-center"><Check size={14} aria-hidden="true" /></span>
         <span>thought for {doneSeconds}s</span>
       </div>
     )
@@ -76,7 +72,7 @@ function ThinkingIndicator({ startedAt, doneSeconds }: { startedAt: number; done
 
   return (
     <div className="flex items-center gap-2 mt-2 font-mono text-[14px] text-[#a855f7]">
-      <span className="inline-block w-4 text-center">{SPINNER_FRAMES[frame]}</span>
+      <span className="inline-flex w-4 justify-center"><Sparkles size={14} className="animate-pulse" aria-hidden="true" /></span>
       <span>{verb}…</span>
       <span className="text-[#71717a]">
         (esc to interrupt · {elapsedStr})
@@ -533,21 +529,21 @@ export default function CodexPage(): React.JSX.Element {
         case 'compact':
           setMessages(prev => [...prev, 
             { id: Date.now().toString(), role: 'user', text: '/compact' },
-            { id: (Date.now()+1).toString(), role: 'agent', text: '⚡ Session context compacted successfully.' }
+            { id: (Date.now()+1).toString(), role: 'agent', text: 'Session context compacted successfully.' }
           ])
           setInputValue('')
           return
         case 'cost':
           setMessages(prev => [...prev, 
             { id: Date.now().toString(), role: 'user', text: '/cost' },
-            { id: (Date.now()+1).toString(), role: 'agent', text: `📊 Current Session Usage:\n- Input Tokens: ${tokenUsage.input.toLocaleString()}\n- Output Tokens: ${tokenUsage.output.toLocaleString()}\n- Estimated Cost: $${tokenUsage.totalCost.toFixed(4)}` }
+            { id: (Date.now()+1).toString(), role: 'agent', text: `Current Session Usage:\n- Input Tokens: ${tokenUsage.input.toLocaleString()}\n- Output Tokens: ${tokenUsage.output.toLocaleString()}\n- Estimated Cost: $${tokenUsage.totalCost.toFixed(4)}` }
           ])
           setInputValue('')
           return
         case 'context':
           setMessages(prev => [...prev, 
             { id: Date.now().toString(), role: 'user', text: '/context' },
-            { id: (Date.now()+1).toString(), role: 'agent', text: `🧠 Tokens: ${tokenUsage.input + tokenUsage.output} / 128,000` }
+            { id: (Date.now()+1).toString(), role: 'agent', text: `Tokens: ${tokenUsage.input + tokenUsage.output} / 128,000` }
           ])
           setInputValue('')
           return
@@ -558,7 +554,7 @@ export default function CodexPage(): React.JSX.Element {
             setActiveSessionId(id)
             setMessages(prev => [...prev, 
               { id: Date.now().toString(), role: 'user', text: rawInput },
-              { id: (Date.now()+1).toString(), role: 'agent', text: `⚡ Switched to session: ${id}` }
+              { id: (Date.now()+1).toString(), role: 'agent', text: `Switched to session: ${id}` }
             ])
           } else {
             const list = savedSessions.map(s => `- \`${s.sessionId}\`: ${s.firstPrompt || 'Untitled Session'}`).join('\n')
@@ -600,7 +596,7 @@ export default function CodexPage(): React.JSX.Element {
         const next = [...prev]
         const last = next[next.length - 1]
         if (last && last.role === 'agent') {
-          last.text = `❌ **Error**: ${e.message || 'Execution failed'}`
+          last.text = `**Error**: ${e.message || 'Execution failed'}`
         }
         return next
       })

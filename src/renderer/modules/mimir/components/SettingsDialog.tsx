@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, type ChangeEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Check, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/modules/mimir/lib/api";
 import type { SystemConfig, UpdateSystemConfig } from "@/modules/mimir/types/api";
@@ -348,7 +349,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 aria-label="Close settings"
                 className="w-8 h-8 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors text-lg leading-none"
               >
-                ✕
+                <X size={16} aria-hidden="true" />
               </button>
             </div>
 
@@ -533,7 +534,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                           </button>
                         </form>
                         {localStorage.getItem("mimir_admin_token") && (
-                          <div className="text-[10px] font-normal text-bull mt-1">✓ ENABLED</div>
+                          <div className="flex items-center gap-1 text-[10px] font-normal text-bull mt-1"><Check size={12} aria-hidden="true" /> ENABLED</div>
                         )}
                       </div>
                       {renderField(

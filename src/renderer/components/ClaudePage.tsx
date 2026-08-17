@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { Check, ShieldAlert, Paperclip, Server, Square, ChevronDown, History, Plus, Clock, Trash2, Search, Folder, PanelRight, ArrowUp } from 'lucide-react'
+import { Check, ShieldAlert, Paperclip, Server, Square, ChevronDown, History, Plus, Clock, Trash2, Search, Folder, PanelRight, ArrowUp, Sparkles } from 'lucide-react'
 import { ExpandableSettings } from './ExpandableSettings'
 import type { BridgeEvent, ClaudeSessionMetadata } from '@shared/types'
 import { PremiumModelSelector, ReasoningSelector, GenericModeToggle, WorkspaceSelector } from './ComposerComponents'
@@ -47,22 +47,18 @@ const VERBS = [
   "Contemplating", "Deciphering", "Synthesizing", "Puzzling", "Tinkering",
   "Wrangling", "Orchestrating", "Sketching", "Untangling", "Forging",
 ]
-const SPINNER_FRAMES = ["✶", "✻", "✽", "✢"]
-
 function ThinkingIndicator({ startedAt, tokenCount, doneSeconds }: {
   startedAt: number
   tokenCount: number
   doneSeconds?: number
 }) {
-  const [frame, setFrame] = useState(0)
   const [verb] = useState(() => VERBS[Math.floor(Math.random() * VERBS.length)])
   const [elapsed, setElapsed] = useState(0)
 
   useEffect(() => {
     if (doneSeconds != null) return
-    const spin = setInterval(() => setFrame(f => (f + 1) % SPINNER_FRAMES.length), 120)
     const tick = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000)
-    return () => { clearInterval(spin); clearInterval(tick); }
+    return () => clearInterval(tick)
   }, [startedAt, doneSeconds])
 
   const mm = Math.floor(elapsed / 60), ss = elapsed % 60
@@ -72,7 +68,7 @@ function ThinkingIndicator({ startedAt, tokenCount, doneSeconds }: {
   if (doneSeconds != null) {
     return (
       <div className="flex items-center gap-2 mt-2 font-mono text-[13px] text-[#71717a]">
-        <span className="inline-block w-4 text-center">✳</span>
+        <span className="inline-flex w-4 justify-center"><Check size={14} aria-hidden="true" /></span>
         <span>thought for {doneSeconds}s</span>
       </div>
     )
@@ -80,7 +76,7 @@ function ThinkingIndicator({ startedAt, tokenCount, doneSeconds }: {
 
   return (
     <div className="flex items-center gap-2 mt-2 font-mono text-[13px]" style={{ color: "var(--accent)" }}>
-      <span className="inline-block w-4 text-center">{SPINNER_FRAMES[frame]}</span>
+      <span className="inline-flex w-4 justify-center"><Sparkles size={14} className="animate-pulse" aria-hidden="true" /></span>
       <span>{verb}…</span>
       <span className="text-[#71717a]">
         (esc to interrupt · {elapsedStr} · ↓ {tokenStr} tokens)
@@ -493,7 +489,7 @@ export default function ClaudePage(): React.JSX.Element {
         case 'doctor':
           setMessages(prev => [...prev, 
             { id: Date.now().toString(), role: 'user', text: rawInput },
-            { id: (Date.now() + 1).toString(), role: 'claude', text: `🩺 **Environment Health Check**:\n- Node.js: v24.x\n- Electron: 43.x\n- Working Dir: \`${cwd}\`\n- Permission Mode: \`${permissionMode}\`\n- System Status: Healthy` }
+            { id: (Date.now() + 1).toString(), role: 'claude', text: `**Environment Health Check**:\n- Node.js: v24.x\n- Electron: 43.x\n- Working Dir: \`${cwd}\`\n- Permission Mode: \`${permissionMode}\`\n- System Status: Healthy` }
           ])
           setInputValue('')
           return
