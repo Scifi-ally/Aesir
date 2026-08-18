@@ -14,7 +14,9 @@ Aesir is a private Electron desktop workspace for interacting with multiple deve
 | `src/shared` | Types and connector manifests shared by main and renderer processes. |
 | `backend/src` | TypeScript backend services, market analysis, persistence, and trading engines. |
 | `backend/db` and `backend/drizzle` | Database schema, migrations, and Drizzle configuration. |
-| `backend/tests` and `backend/src/**/*.test.ts` | Backend unit, regression, integration, and performance tests. |
+| `backend/tests` | Backend unit, regression, integration, and performance tests. |
+| `backend/scripts` | Operational, research, database, and reporting scripts that are not production modules. |
+| `src/test` | Electron/main-process and renderer test suites. |
 | `public` and `icons` | Static UI assets and application icons. |
 
 ## Prerequisites
@@ -53,7 +55,10 @@ From the repository root:
 ```bash
 npm run dev          # Start the Electron/Vite development environment
 npm run typecheck    # Type-check the Electron and renderer sources
+npm test             # Run the renderer Vitest suite
+npm run validate     # Typecheck, test, and build the desktop application
 npm run build        # Build the desktop application bundles
+npm audit --audit-level=high # Check desktop dependency advisories
 npm run dist         # Build and package for the current platform
 ```
 
@@ -62,17 +67,20 @@ From `backend/`:
 ```bash
 npm run typecheck    # Type-check backend sources
 npm test             # Run the backend Vitest suite
+npm run validate     # Typecheck, test, and build the backend
 npm run test:all     # Run preflight checks and the full test suite
 npm run build        # Bundle backend entry points into backend/dist
+npm run audit:runtime # Check runtime-only backend advisories
+npm audit --audit-level=high # Check backend dependency advisories
 ```
 
-Commands that access brokers, market data, PostgreSQL, Redis, or external AI services require their respective local configuration and should be run only against the intended environment.
+Commands that access brokers, market data, PostgreSQL, Redis, or external AI services require their respective local configuration and should be run only against the intended environment. The backend runtime has no high-severity advisories; the remaining moderate findings are development-only and originate upstream in Drizzle Kit's legacy esbuild loader.
 
 ## Architecture notes
 
 The Electron main process owns privileged operations, credential access, filesystem interactions, external connectors, and child-process orchestration. The preload process exposes a deliberately scoped bridge to the renderer. Renderer modules should communicate through that bridge rather than importing Node.js APIs. Connector credentials are stored through the OS-backed vault flow and should never be placed in source files, screenshots, fixtures, or local-storage values.
 
-The backend is intentionally separate from the Electron bundle. Its build entry points are declared in `backend/build.mjs`, and its database schema is maintained through Drizzle migrations. Market-data caches and local databases are runtime state, not source artifacts, and must be generated in the developer’s environment.
+The backend is intentionally separate from the Electron bundle. Its build entry points are declared in `backend/build.mjs`, and its database schema is maintained through Drizzle migrations. Production modules live under `backend/src`; tests live under `backend/tests`; and operational scripts live under `backend/scripts`. Market-data caches and local databases are runtime state, not source artifacts, and must be generated in the developer’s environment.
 
 ## Validation expectations
 

@@ -1,6 +1,6 @@
 # Aesir Repository Audit Report
 
-**Audit date:** 17 August 2026  
+**Audit date:** 18 August 2026  
 **Repository:** `Scifi-ally/Aesir`  
 **Audited scope:** Aesir only
 
@@ -8,7 +8,7 @@
 
 The repository began with one initial commit and a working tree containing committed local runtime state. The audit found a tracked backend environment file, a browser session file, a 141,815-file market-data cache, local database and archive artifacts, generated lint reports, scratch scripts, and multiple UI locations using emoji or decorative Unicode glyphs. The repository also lacked primary setup, contribution, and security documentation.
 
-The remediation removed those local artifacts from the working tree and from reachable `main` history, added ignore rules and a non-secret environment template, replaced UI emoji and decorative glyph usage with Lucide SVG icons or explicit text labels, corrected a backend dependency conflict, fixed a deterministic signal-generator regression test, added documentation, and added CI validation for the desktop and backend packages.
+The remediation removed those local artifacts from the working tree and from reachable `main` history, added ignore rules and a non-secret environment template, replaced UI emoji and decorative glyph usage with Lucide SVG icons or explicit text labels, corrected a backend dependency conflict, fixed a deterministic signal-generator regression test, added documentation, and added CI validation for the desktop and backend packages. A follow-up engineering pass then added renderer lazy loading, mail-cache correctness fixes, request and polling race guards, graceful service shutdown, atomic settings writes, consolidated test and script trees, typed Yahoo Finance integration, and release validation wiring.
 
 The sanitized history was published to `main` with a force-with-lease update because removing previously committed credentials and session material requires rewriting the affected history. The old history is preserved only in the external local recovery bundle created during the audit; it is not part of the repository’s published refs.
 
@@ -26,7 +26,7 @@ The sanitized history was published to `main` with a force-with-lease update bec
 
 ## Implemented changes
 
-The repository now has explicit setup and architecture guidance, a documented security boundary between the Electron main process, preload bridge, renderer, and backend, and a CI workflow at `.github/workflows/ci.yml`. The backend build no longer depends on an incompatible unused plugin. The environment template contains empty values for credentials and database configuration, and local state is ignored by default.
+The repository now has explicit setup and architecture guidance, a documented security boundary between the Electron main process, preload bridge, renderer, and backend, and a CI workflow at `.github/workflows/ci.yml`. The backend build no longer depends on an incompatible unused plugin. The environment template contains empty values for credentials and database configuration, and local state is ignored by default. The follow-up pass also centralizes Yahoo Finance client construction, moves tests into dedicated `src/test/` and `backend/tests/` trees, adds backend linting to `validate`, lazy-loads renderer routes, and hardens provider/cache mutation ordering.
 
 A shared SVG icon component maps named actions to Lucide icons and falls back to compact connector initials only when the value is manifest data. The migration covers command-palette navigation, terminal actions, settings actions, connector refresh, issue reactions, agent thinking indicators, Mimir settings, and status messages. A source scan found no emoji codepoints in `src` or `.smoke` after the migration.
 
@@ -34,24 +34,30 @@ A shared SVG icon component maps named actions to Lucide icons and falls back to
 
 | Check | Result |
 | --- | --- |
-| Root `npm ci` | Passed. |
-| Backend `npm ci` | Passed after removing the incompatible plugin and regenerating `backend/package-lock.json`. |
+| Root `npm ci` | Passed after lockfile dependency updates. |
+| Backend `npm ci` | Passed after lockfile dependency updates. |
 | Root `npm run typecheck` | Passed. |
-| Root `npm run build` | Passed. |
+| Root `npm test -- --reporter=dot` | Passed: 6 test files and 11 tests. |
+| Root `npm run validate` | Passed: typecheck, renderer tests, and production build. |
 | Backend `npm run typecheck` | Passed. |
-| Backend `npm test -- --reporter=dot` | Passed: 21 test files and 70 tests. |
-| Backend `npm run build` | Passed. |
+| Backend `npm run lint` | Passed with zero errors and zero warnings. |
+| Backend `npm test -- --reporter=dot` | Passed: 22 test files and 71 tests. |
+| Backend `npm run validate` | Passed: typecheck, backend tests, and production build. |
+| Backend `npm run audit:runtime` | Passed: 0 runtime vulnerabilities. |
+| Backend `npm run build` | Passed; compiled intelligence worker emitted at `dist/intelligence/workers/intelligence_worker.mjs`. |
 | Source emoji scan | Passed: no emoji codepoints in `src` or `.smoke`. |
 | Current tracked-tree high-confidence credential scan | Passed. |
 | Reachable local `main` history artifact scan | Passed after history rewrite. |
-| Root `npm audit` | 5 findings: 1 moderate and 4 high. |
-| Backend `npm audit` | 11 findings: 6 moderate and 5 high. |
+| Root `npm audit` | Passed: 0 vulnerabilities after non-breaking updates. |
+| Backend `npm audit --omit=dev` | Passed: 0 runtime vulnerabilities. |
+| Backend full `npm audit` | 4 moderate development-only findings remain in Drizzle Kit's legacy esbuild loader; no high-severity findings remain. |
+| Final source/build validation | Passed; regenerated lockfiles preserve the repository's CRLF format, so Git's default whitespace checker reports line-ending bytes on generated JSON. |
 
-The dependency audit findings remain documented rather than hidden. They should be addressed in a follow-up dependency-maintenance change after confirming compatibility with Electron, Vite, esbuild, Drizzle, and the backend test suite. No `--force` or `--legacy-peer-deps` installation was used to mask the original peer-dependency conflict.
+The remaining backend findings are isolated to the development-time Drizzle Kit toolchain. `npm audit --audit-level=high` is enforced in CI, while runtime dependencies are clean. The backend API and WebSocket servers now expose graceful shutdown paths that close timers, sockets, Redis, and database resources. Intelligence workers now resolve correctly in compiled production output, while test runs disable external worker threads to avoid false module-loader failures. Settings writes are atomic, production-only HSTS is enforced, and the environment template documents runtime, integration, and safety controls.
 
 ## Published history
 
-The published `main` history contains the original initial commit plus six real remediation commits. All remediation commits were created during this audit on 17 August 2026; none were backdated.
+The published `main` history contains the original initial commit plus seven real remediation commits. All remediation commits were created during this audit on 17–18 August 2026; none were backdated. The current follow-up engineering changes described above remain uncommitted for review.
 
 | Commit | Subject | Purpose |
 | --- | --- | --- |
@@ -62,6 +68,7 @@ The published `main` history contains the original initial commit plus six real 
 | `4de4e11e3` | `docs(repo): document setup security and contribution standards` | Add README, contribution, security, changelog, and environment-template documentation. |
 | `18be57b40` | `ci: validate desktop and backend builds` | Add GitHub Actions validation for both packages. |
 | `8fc5c755f` | `fix(config): keep environment examples non-secret` | Keep the example database setting empty for safer automated scanning. |
+| `170173d` | `docs(audit): record findings validation and history policy` | Record the completed audit, validation evidence, and honest-history decision. |
 
 ## Commit-history integrity decision
 
@@ -69,7 +76,7 @@ The request for exactly 100 commits with timestamps distributed from June throug
 
 ## Follow-up recommendations
 
-The next engineering priorities are to reduce the remaining npm audit findings through compatible dependency upgrades, rotate any credentials that were present in the original tracked environment or session files, and configure the repository’s preferred private vulnerability-reporting channel. The audit does not certify external broker, market-data, AI-service, or production deployment behavior; those paths require environment-specific integration validation.
+The remaining priorities are to replace Drizzle Kit's legacy loader when its upstream dependency chain is updated, rotate any credentials that were present in the original tracked environment or session files, and configure the repository’s preferred private vulnerability-reporting channel. The audit does not certify external broker, market-data, AI-service, or production deployment behavior; those paths still require environment-specific integration validation with real credentials and service endpoints.
 
 ## References
 
