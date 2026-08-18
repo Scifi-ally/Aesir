@@ -1,24 +1,14 @@
 import { logger } from "../lib/logger";
 import { fetchFIIDIIData } from "../market_data/fii_dii";
 import { isEconomicEventDay, getTodayEconomicEvent } from "./gap_risk";
+import { yahooFinance } from "../lib/yahoo-finance";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let yahooFinance: any = null;
-let yahooLoadAttempted = false;
+type QuoteWithPrice = { regularMarketPrice?: number | null };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getYahooFinance(): Promise<any> {
-  if (yahooLoadAttempted) return yahooFinance;
-  yahooLoadAttempted = true;
-  try {
-    const yfModule = await import("yahoo-finance2");
-    const Ctor = (yfModule as any).default?.default || (yfModule as any).default || yfModule;
-    yahooFinance = typeof Ctor === 'function' ? new Ctor({ suppressNotices: ['yahooSurvey'] }) : Ctor;
-  } catch {
-    logger.warn("yahoo-finance2 not installed");
-    yahooFinance = null;
-  }
-  return yahooFinance;
+function getQuotePrice(quote: unknown): number | null {
+  if (typeof quote !== "object" || quote === null) return null;
+  const price = (quote as QuoteWithPrice).regularMarketPrice;
+  return typeof price === "number" ? price : null;
 }
 
 // India 10Y estimate inputs. RBI_REPO_RATE tracks the current policy repo rate;
@@ -67,8 +57,7 @@ export function getGlobalMacroState(): GlobalMacroState {
 
 export async function fetchGlobalMacroData(): Promise<GlobalMacroState> {
   try {
-    const yf = await getYahooFinance();
-    if (!yf) return _state;
+    const yf = yahooFinance;
 
     // ^TNX = US 10-Year T-Note
     // DX-Y.NYB = US Dollar Index
@@ -85,40 +74,35 @@ export async function fetchGlobalMacroData(): Promise<GlobalMacroState> {
     let diiNetInr = _state.diiNetInr;
 
     const [tnx, dx, bz, inr, in10, vix, fiiDiiData] = await Promise.all([
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      yf.quote("^TNX").catch(() => null) as Promise<any>,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      yf.quote("DX-Y.NYB").catch(() => null) as Promise<any>,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      yf.quote("BZ=F").catch(() => null) as Promise<any>,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      yf.quote("INR=X").catch(() => null) as Promise<any>,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      yf.quote("^IN10Y").catch(() => null) as Promise<any>,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      yf.quote("^INDIAVIX").catch(() => null) as Promise<any>,
+      yf.quote("^TNX").catch(() => null),
+      yf.quote("DX-Y.NYB").catch(() => null),
+      yf.quote("BZ=F").catch(() => null),
+      yf.quote("INR=X").catch(() => null),
+      yf.quote("^IN10Y").catch(() => null),
+      yf.quote("^INDIAVIX").catch(() => null),
       fetchFIIDIIData().catch(() => null),
     ]);
 
-    if (tnx && tnx.regularMarketPrice) {
-      us10YearYield = tnx.regularMarketPrice;
-    }
-    if (dx && dx.regularMarketPrice) {
-      dxy = dx.regularMarketPrice;
-    }
-    if (bz && bz.regularMarketPrice) {
-      brentCrude = bz.regularMarketPrice;
-    }
+    const tnxPrice = getQuotePrice(tnx);
+    const dxyPrice = getQuotePrice(dx);
+    const brentPrice = getQuotePrice(bz);
+    const inrPrice = getQuotePrice(inr);
+    const india10yPrice = getQuotePrice(in10);
+    const vixPrice = getQuotePrice(vix);
+
+    if (tnxPrice !== null) us10YearYield = tnxPrice;
+    if (dxyPrice !== null) dxy = dxyPrice;
+    if (brentPrice !== null) brentCrude = brentPrice;
     // Sanity band only rejects data-corruption values (Yahoo occasionally
     // returns paise or reciprocal quotes). Band must cover realistic INR
     // depreciation — the old [70,90] silently froze usdInr past 90.
-    if (inr && typeof inr.regularMarketPrice === 'number' && inr.regularMarketPrice >= 60 && inr.regularMarketPrice <= 120) {
-      usdInr = inr.regularMarketPrice;
-    } else if (inr?.regularMarketPrice != null) {
-      logger.warn({ value: inr.regularMarketPrice }, "USD/INR quote outside sanity band [60,120] — keeping previous value");
+    if (inrPrice !== null && inrPrice >= 60 && inrPrice <= 120) {
+      usdInr = inrPrice;
+    } else if (inrPrice !== null) {
+      logger.warn({ value: inrPrice }, "USD/INR quote outside sanity band [60,120] — keeping previous value");
     }
-    if (in10 && in10.regularMarketPrice) {
-      india10y = in10.regularMarketPrice;
+    if (india10yPrice !== null) {
+      india10y = india10yPrice;
       india10yIsEstimate = false;
     } else if (india10y === null) {
       // Yahoo's ^IN10Y is chronically null and no other free source serves the
@@ -131,8 +115,8 @@ export async function fetchGlobalMacroData(): Promise<GlobalMacroState> {
       india10y = RBI_REPO_RATE + INDIA_10Y_TERM_SPREAD;
       india10yIsEstimate = true;
     }
-    if (vix && vix.regularMarketPrice) {
-      indiaVix = vix.regularMarketPrice;
+    if (vixPrice !== null) {
+      indiaVix = vixPrice;
     }
     if (fiiDiiData) {
       fiiNetInr = fiiDiiData.fiiNetInr;

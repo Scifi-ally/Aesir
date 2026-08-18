@@ -14,6 +14,7 @@
 
 import { logger } from "../lib/logger";
 import { getISTDateStr } from "../lib/ist-time";
+import { yahooFinance } from "../lib/yahoo-finance";
 
 // ── Economic event calendar ───────────────────────────────────────────────────
 // IST dates of scheduled high-impact events. Update as RBI/Fed/CPI schedules
@@ -67,29 +68,11 @@ let gapCache: GapRiskSnapshot | null = null;
 let gapCacheTime = 0;
 const GAP_CACHE_TTL_MS = 15 * 60 * 1000;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let yahooFinance: any = null;
-let yahooLoadAttempted = false;
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getYahooFinance(): Promise<any> {
-  if (yahooLoadAttempted) return yahooFinance;
-  yahooLoadAttempted = true;
-  try {
-    const yfModule = await import("yahoo-finance2");
-    const Ctor = (yfModule as any).default?.default || (yfModule as any).default || yfModule;
-    yahooFinance = typeof Ctor === 'function' ? new Ctor({ suppressNotices: ['yahooSurvey'] }) : Ctor;
-  } catch {
-    logger.warn("yahoo-finance2 not installed — gap risk unavailable");
-    yahooFinance = null;
-  }
-  return yahooFinance;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function changePct(quote: any): number | null {
-  const price = quote?.regularMarketPrice;
-  const prev = quote?.regularMarketPreviousClose;
+function changePct(quote: unknown): number | null {
+  if (typeof quote !== "object" || quote === null) return null;
+  const record = quote as Record<string, unknown>;
+  const price = record.regularMarketPrice;
+  const prev = record.regularMarketPreviousClose;
   if (typeof price === "number" && typeof prev === "number" && prev > 0) {
     return ((price - prev) / prev) * 100;
   }
@@ -109,14 +92,10 @@ export async function fetchGapRisk(): Promise<GapRiskSnapshot> {
   };
 
   try {
-    const yf = await getYahooFinance();
-    if (yf) {
-      const [es, inr] = await Promise.all([
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        yf.quote("ES=F").catch(() => null) as Promise<any>,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        yf.quote("INR=X").catch(() => null) as Promise<any>,
-      ]);
+    const [es, inr] = await Promise.all([
+      yahooFinance.quote("ES=F").catch(() => null),
+      yahooFinance.quote("INR=X").catch(() => null),
+    ]);
 
       snapshot.spxFuturesChangePct = changePct(es);
       snapshot.usdInrChangePct = changePct(inr);
@@ -140,10 +119,9 @@ export async function fetchGapRisk(): Promise<GapRiskSnapshot> {
         snapshot.riskLevel = "MODERATE";
       } else {
         snapshot.riskLevel = "LOW";
-      }
-    }
+      };
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, "Gap risk fetch failed");
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Gap risk fetch failed");
   }
 
   gapCache = snapshot;

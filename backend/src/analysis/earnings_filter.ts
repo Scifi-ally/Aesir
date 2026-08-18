@@ -12,6 +12,7 @@
 import { logger } from "../lib/logger";
 import { db } from "../../db/src";
 import { fundamentalSnapshotsTable } from "../../db/src/schema/fundamentals";
+import { yahooFinance } from "../lib/yahoo-finance";
 // ── In-memory cache to avoid re-fetching the same symbol within a session ────
 
 interface EarningsCache {
@@ -22,31 +23,8 @@ interface EarningsCache {
 const earningsCache = new Map<string, EarningsCache>();
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-// ── Yahoo Finance 2 lazy import ──────────────────────────────────────────────
-// We lazy-import yahoo-finance2 so the module doesn't crash if the package
-// is missing — it gracefully degrades to "no earnings data available".
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let yahooFinance: any = null;
-let yahooLoadAttempted = false;
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getYahooFinance(): Promise<any> {
-  if (yahooLoadAttempted) return yahooFinance;
-  yahooLoadAttempted = true;
-  try {
-    const yfModule = await import("yahoo-finance2");
-    const Ctor = (yfModule as any).default?.default || (yfModule as any).default || yfModule;
-    yahooFinance = typeof Ctor === 'function' ? new Ctor({ suppressNotices: ['yahooSurvey'] }) : Ctor;
-    logger.info("yahoo-finance2 loaded successfully for earnings evasion");
-  } catch {
-    logger.warn(
-      "yahoo-finance2 not installed — earnings evasion filter disabled. Run: npm install yahoo-finance2",
-    );
-    yahooFinance = null;
-  }
-  return yahooFinance;
-}
+// yahoo-finance2 is a required backend dependency. Provider errors are handled
+// at the query boundary below so the filter still degrades to no earnings data.
 
 // ── Fetch earnings date for a single symbol ──────────────────────────────────
 
@@ -59,8 +37,7 @@ export async function getNextEarningsDate(
     return cached.earningsDate;
   }
 
-  const yf = await getYahooFinance();
-  if (!yf) return null;
+  const yf = yahooFinance;
 
   try {
     // Convert NSE symbol to Yahoo format (e.g., "RELIANCE" → "RELIANCE.NS")

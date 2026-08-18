@@ -8,9 +8,7 @@
  * HIGH FIX (Issue #9): Added retry logic with exponential backoff and trading
  * calendar awareness to handle transient failures and market holidays properly.
  */
-import yahooFinanceModule from 'yahoo-finance2';
-const Ctor = (yahooFinanceModule as any).default?.default || (yahooFinanceModule as any).default || yahooFinanceModule;
-const yahooFinance = new Ctor({ suppressNotices: ['yahooSurvey'] });
+import { yahooFinance } from "../lib/yahoo-finance";
 import { updateMarketState } from "./market_state";
 import { recordVixSample } from "../analysis/market_internals";
 import { detectRegime } from "../analysis/regime_detector";
@@ -31,7 +29,6 @@ interface QuoteResult {
   regularMarketPreviousClose?: number;
   regularMarketPrice?: number;
 }
-type QuoteFn = (symbol: string) => Promise<QuoteResult>;
 
 export interface MarketFeedSnapshot {
   status:
@@ -93,7 +90,7 @@ export async function initMarketFeed(): Promise<void> {
   }
 
   try {
-    const quote = await ((yahooFinance.quote as unknown) as QuoteFn)(NIFTY_KEY);
+    const quote = await yahooFinance.quote(NIFTY_KEY) as QuoteResult;
     niftyPrevClose = quote.regularMarketPreviousClose ?? null;
     
     if (niftyPrevClose === null) {
@@ -139,8 +136,8 @@ export async function updateMarketFeed(): Promise<void> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const niftyQuote = await ((yahooFinance.quote as unknown) as QuoteFn)(NIFTY_KEY).catch(() => null);
-      const vixQuote = await ((yahooFinance.quote as unknown) as QuoteFn)(VIX_KEY).catch(() => null);
+      const niftyQuote = await yahooFinance.quote(NIFTY_KEY).catch(() => null) as QuoteResult | null;
+      const vixQuote = await yahooFinance.quote(VIX_KEY).catch(() => null) as QuoteResult | null;
 
       const niftyLTP = niftyQuote?.regularMarketPrice ?? null;
       const vixLTP = vixQuote?.regularMarketPrice ?? null;

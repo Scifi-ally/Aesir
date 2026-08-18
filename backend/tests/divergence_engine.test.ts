@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { computeFiiDiiDivergence } from "../src/analysis/divergence_engine";
 import yahooFinance from "yahoo-finance2";
-import { db } from "../../db/src";
+import { db } from "../db/src";
 
 vi.mock("yahoo-finance2", () => {
   return {

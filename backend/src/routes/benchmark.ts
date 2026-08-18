@@ -2,9 +2,7 @@ import { Router } from "express";
 import { db } from "../../db/src";
 import { paperPositionsTable, paperAccountsTable } from "../../db/src/schema/paper_trading";
 import { asc } from "drizzle-orm";
-import yahooFinanceModule from 'yahoo-finance2';
-const Ctor = (yahooFinanceModule as any).default?.default || (yahooFinanceModule as any).default || yahooFinanceModule;
-const yahooFinance = typeof Ctor === 'function' ? new (Ctor as any)({ suppressNotices: ['yahooSurvey'] }) : Ctor;
+import { yahooFinance } from "../lib/yahoo-finance";
 
 const router = Router();
 

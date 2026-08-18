@@ -1,13 +1,14 @@
-import yahooFinanceModule from 'yahoo-finance2';
-const Ctor = (yahooFinanceModule as any).default?.default || (yahooFinanceModule as any).default || yahooFinanceModule;
-const yahooFinance = typeof Ctor === 'function' ? new (Ctor as any)({ suppressNotices: ['yahooSurvey'] }) : Ctor;
 import { logger } from "../lib/logger";
+import { yahooFinance } from "../lib/yahoo-finance";
 import { findStockBySymbol } from "./stock_scanner";
 import { createUpstoxClient } from "../lib/upstox-client";
 import { getAccessToken } from "../upstox/auth";
 import { getISTDateStr } from "../lib/ist-time";
 
 const upstoxClient = createUpstoxClient({ cacheTimeMs: 15_000 });
+
+type SparklineQuote = { close?: number | null };
+type SparklineResult = { quotes?: SparklineQuote[] };
 
 export async function fetchSparklines(symbols: string[]): Promise<Record<string, number[]>> {
   const results: Record<string, number[]> = {};
@@ -35,20 +36,17 @@ export async function fetchSparklines(symbols: string[]): Promise<Record<string,
       );
       timeoutPromise.catch(() => {});
       
-      const result = (await Promise.race([
-        yahooFinance.chart(yfSymbol, queryOptions),
-        timeoutPromise
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ])) as any;
+      const result = await Promise.race([
+        yahooFinance.chart(yfSymbol, queryOptions) as Promise<SparklineResult>,
+        timeoutPromise as Promise<never>,
+      ]);
       
       clearTimeout(timer!);
       
       if (result && result.quotes && result.quotes.length > 0) {
         const closes = result.quotes
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((q: any) => q.close)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .filter((c: any): c is number => typeof c === 'number' && c > 0);
+          .map((q) => q.close)
+          .filter((c): c is number => typeof c === 'number' && c > 0);
         
         // Return the last 20 closing prices for the sparkline
         if (closes.length > 0) {
@@ -57,8 +55,7 @@ export async function fetchSparklines(symbols: string[]): Promise<Record<string,
         }
       }
     } catch (err) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      logger.debug({ symbol, err: (err as any).message }, "Failed to fetch sparkline from Yahoo Finance, attempting Upstox fallback");
+      logger.debug({ symbol, err: err instanceof Error ? err.message : String(err) }, "Failed to fetch sparkline from Yahoo Finance, attempting Upstox fallback");
     }
 
     // Upstox Fallback if Yahoo Finance timed out or returned no data
@@ -86,8 +83,7 @@ export async function fetchSparklines(symbols: string[]): Promise<Record<string,
           }
         }
       } catch (fbErr) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        logger.debug({ symbol, err: (fbErr as any).message }, "Upstox sparkline fallback failed");
+        logger.debug({ symbol, err: fbErr instanceof Error ? fbErr.message : String(fbErr) }, "Upstox sparkline fallback failed");
       }
     }
   });
