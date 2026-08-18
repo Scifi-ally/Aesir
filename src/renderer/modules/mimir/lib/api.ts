@@ -6,6 +6,22 @@ export function hasAdminToken(): boolean {
   return Boolean(localStorage.getItem("mimir_admin_token")?.trim());
 }
 
+const API_REQUEST_TIMEOUT_MS = 15_000;
+
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+  const forwardAbort = () => controller.abort();
+  init?.signal?.addEventListener("abort", forwardAbort, { once: true });
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+    init?.signal?.removeEventListener("abort", forwardAbort);
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem("mimir_admin_token");
   const headers = new Headers(init?.headers);
@@ -16,18 +32,21 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("x-admin-token", token);
   }
 
-  let baseUrl = import.meta.env.VITE_API_URL || "";
+  let baseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
   if (!baseUrl) {
     baseUrl = "http://127.0.0.1:1420";
   }
   let res: Response;
   try {
-    res = await fetch(`${baseUrl}${path}`, {
+    res = await fetchWithTimeout(`${baseUrl}${path}`, {
       credentials: "include",
       ...init,
       headers,
     });
   } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("Request timed out — retrying shortly", { cause: err });
+    }
     // TypeError: Failed to fetch — network down / backend not running
     throw new Error("Can't reach server — check connection", { cause: err });
   }
@@ -64,11 +83,11 @@ async function apiFetchSoft<T>(path: string, fallback: T): Promise<T> {
     const headers = new Headers();
     if (token) headers.set("x-admin-token", token);
 
-    let baseUrl = import.meta.env.VITE_API_URL || "";
+    let baseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
     if (!baseUrl) {
       baseUrl = "http://127.0.0.1:1420";
     }
-    const res = await fetch(`${baseUrl}${path}`, { credentials: "include", headers });
+    const res = await fetchWithTimeout(`${baseUrl}${path}`, { credentials: "include", headers });
     
     if (!res.ok) {
       console.error(`Soft API fetch failed for ${path}: HTTP ${res.status}`);

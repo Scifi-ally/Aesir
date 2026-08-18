@@ -36,7 +36,15 @@ export function useDashboardData() {
   const scanLogs = useStore((s) => s.scanLogs);
   const mergeIndices = useStore((s) => s.mergeIndices);
 
-  const sessionQuery = useQuery({ queryKey: ["session"], queryFn: api.sessionState, refetchInterval: scanState.scanning ? 5000 : 15000, staleTime: 10000, retry: 30, retryDelay: 1000, placeholderData: (prev) => prev });
+  const sessionQuery = useQuery({
+    queryKey: ["session"],
+    queryFn: api.sessionState,
+    refetchInterval: scanState.scanning ? 5000 : 15000,
+    staleTime: 10000,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
+    placeholderData: (prev) => prev,
+  });
 
   useEffect(() => {
     if (sessionQuery.data && !sessionQuery.data.scanRunning && scanState.scanning) {
@@ -44,7 +52,15 @@ export function useDashboardData() {
     }
   }, [sessionQuery.data, sessionQuery.data?.scanRunning, scanState.scanning, setScanState]);
 
-  const statusQuery = useQuery({ queryKey: ["status"], queryFn: api.systemStatus, refetchInterval: 15000, staleTime: 10000, retry: 30, retryDelay: 1000, placeholderData: (prev) => prev });
+  const statusQuery = useQuery({
+    queryKey: ["status"],
+    queryFn: api.systemStatus,
+    refetchInterval: 15000,
+    staleTime: 10000,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
+    placeholderData: (prev) => prev,
+  });
   const watchlistQuery = useQuery({
     queryKey: ["watchlist"],
     queryFn: api.watchlistToday,
@@ -178,7 +194,7 @@ export function useDashboardData() {
       const items = flattenWatchlist(watchlistQuery.data);
       items.forEach((item) => {
         const price = item.price ?? item.ltp;
-        const changePct = item.changePct ?? item.changePct;
+        const changePct = item.changePct ?? null;
         if (price != null && Number.isFinite(price) && price > 0) {
           marketDataStore.updateFromRest(item.symbol, {
             ltp: price,
