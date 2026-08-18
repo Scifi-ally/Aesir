@@ -33,20 +33,16 @@ jobs:
         working-directory: backend
         run: npm ci
 
-      - name: Typecheck desktop application
-        run: npm run typecheck
+      - name: Audit desktop dependencies
+        run: npm audit --audit-level=high
 
-      - name: Build desktop application
-        run: npm run build
+      - name: Validate desktop application
+        run: npm run validate
 
-      - name: Typecheck backend
+      - name: Audit backend dependencies
         working-directory: backend
-        run: npm run typecheck
+        run: npm audit --audit-level=high
 
-      - name: Test backend
+      - name: Validate backend
         working-directory: backend
-        run: npm test -- --reporter=dot
-
-      - name: Build backend
-        working-directory: backend
-        run: npm run build
+        run: npm run validate
