@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AppSettings } from '@shared/types'
@@ -47,8 +47,12 @@ export function getSettings(): AppSettings {
 
 export function setSettings(patch: Partial<AppSettings>): AppSettings {
   const next = { ...getSettings(), ...patch }
+  const target = file()
+  const temp = `${target}.tmp`
   cache = next
-  writeFileSync(file(), JSON.stringify(next, null, 2), 'utf8')
+  mkdirSync(join(app.getPath('userData')), { recursive: true })
+  writeFileSync(temp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
+  renameSync(temp, target)
   return next
 }
 
