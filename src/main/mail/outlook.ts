@@ -168,14 +168,16 @@ function addr(p?: { emailAddress?: { name?: string; address?: string } }): strin
 export async function outlookList(
   accountId: string,
   email: string,
-  opts: { query?: string; max?: number } = {}
+  opts: { query?: string; max?: number; folderId?: string; label?: string; filter?: string } = {}
 ): Promise<MailHeader[]> {
   const max = Math.min(Math.max(opts.max ?? 40, 1), 100)
   const select = '$select=id,conversationId,subject,bodyPreview,isRead,receivedDateTime,from,toRecipients'
   const q = opts.query?.trim()
+  const folderPath = opts.folderId ? `/me/mailFolders/${encodeURIComponent(opts.folderId)}/messages` : '/me/messages'
+  const filter = opts.filter ? `&$filter=${encodeURIComponent(opts.filter)}` : ''
   const path = q
-    ? `/me/messages?$search=${encodeURIComponent(`"${q}"`)}&$top=${max}&${select}`
-    : `/me/messages?$top=${max}&$orderby=receivedDateTime desc&${select}`
+    ? `${folderPath}?$search=${encodeURIComponent(`"${q}"`)}&$top=${max}&${select}`
+    : `${folderPath}?$top=${max}&$orderby=receivedDateTime desc&${select}${filter}`
 
   const res = await graph<{ value: GraphMessage[] }>(email, path)
   return res.value.map((m) => ({
@@ -188,7 +190,7 @@ export async function outlookList(
     snippet: m.bodyPreview ?? '',
     date: m.receivedDateTime ? Date.parse(m.receivedDateTime) : Date.now(),
     unread: m.isRead === false,
-    labels: []
+    labels: opts.label ? [opts.label] : []
   }))
 }
 

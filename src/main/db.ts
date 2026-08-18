@@ -421,14 +421,21 @@ export function markReadInDb(accountId: string, id: string): void {
 }
 
 export function starInDb(accountId: string, id: string, add: boolean): void {
+  updateMailLabelsInDb(accountId, id, add ? [] : ['STARRED'], add ? ['STARRED'] : [])
+}
+
+export function updateMailLabelsInDb(accountId: string, id: string, remove: string[], add: string[]): void {
   const row = db.prepare('SELECT labels FROM mail_headers WHERE account_id = ? AND id = ?').get(accountId, id) as { labels: string } | undefined
-  if (row) {
-    let labelsArr: string[] = []
-    try { labelsArr = JSON.parse(row.labels) } catch {}
-    if (add && !labelsArr.includes('STARRED')) labelsArr.push('STARRED')
-    if (!add) labelsArr = labelsArr.filter(l => l !== 'STARRED')
-    db.prepare('UPDATE mail_headers SET labels = ? WHERE account_id = ? AND id = ?').run(JSON.stringify(labelsArr), accountId, id)
+  if (!row) return
+
+  let labelsArr: string[] = []
+  try { labelsArr = JSON.parse(row.labels) } catch {}
+  const removeSet = new Set(remove.map((label) => label.toUpperCase()))
+  labelsArr = labelsArr.filter((label) => !removeSet.has(label.toUpperCase()))
+  for (const label of add) {
+    if (!labelsArr.includes(label)) labelsArr.push(label)
   }
+  db.prepare('UPDATE mail_headers SET labels = ? WHERE account_id = ? AND id = ?').run(JSON.stringify(labelsArr), accountId, id)
 }
 
 /* ── connectors ───────────────────────────────────────────────────────── */

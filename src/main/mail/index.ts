@@ -11,7 +11,8 @@ import {
   getCachedBody,
   cacheBody,
   markReadInDb,
-  starInDb
+  starInDb,
+  updateMailLabelsInDb
 } from '../db'
 import { vaultDelete, vaultKey } from '../vault'
 import {
@@ -82,13 +83,37 @@ export function cachedFolder(id: string, labelId: string): MailHeader[] {
   return getCachedFolderHeaders(id, labelId) || []
 }
 
+const OUTLOOK_FOLDER_IDS: Record<string, string> = {
+  INBOX: 'inbox',
+  SENT: 'sentitems',
+  DRAFT: 'drafts',
+  DRAFTS: 'drafts',
+  SPAM: 'junkemail',
+  TRASH: 'deleteditems',
+  BIN: 'deleteditems',
+  ARCHIVE: 'archive',
+}
+
+const OUTLOOK_FILTERS: Record<string, string> = {
+  STARRED: "flag/flagStatus eq 'flagged'",
+  UNREAD: 'isRead eq false',
+  IMPORTANT: "importance eq 'high'",
+}
+
 export async function folder(id: string, labelId: string): Promise<MailHeader[]> {
   const { provider, email } = split(id)
   let headers: MailHeader[] = []
   if (provider === 'gmail') {
     headers = await gmailFolder(id, email, labelId)
   } else {
-    headers = await outlookList(id, email) // Fallback for outlook
+    const normalizedLabel = labelId.toUpperCase()
+    const folderId = OUTLOOK_FOLDER_IDS[normalizedLabel]
+    const normalizedCacheLabel = normalizedLabel === 'DRAFTS' ? 'DRAFT' : normalizedLabel
+    headers = await outlookList(id, email, {
+      ...(folderId ? { folderId } : {}),
+      ...(OUTLOOK_FILTERS[normalizedLabel] ? { filter: OUTLOOK_FILTERS[normalizedLabel] } : {}),
+      label: normalizedCacheLabel,
+    })
   }
   cacheFolderHeaders(id, labelId, headers)
   return getCachedFolderHeaders(id, labelId)
@@ -104,7 +129,7 @@ export async function drafts(id: string): Promise<MailHeader[]> {
   const { provider, email } = split(id)
   let headers: MailHeader[] = []
   if (provider === 'gmail') headers = await gmailDrafts(id, email)
-  else headers = await outlookList(id, email, { query: 'is:draft' })
+  else headers = await outlookList(id, email, { folderId: 'drafts', label: 'DRAFT' })
   
   cacheFolderHeaders(id, 'DRAFT', headers)
   return getCachedFolderHeaders(id, 'DRAFT')
@@ -131,29 +156,31 @@ export async function send(req: SendMailRequest): Promise<void> {
 }
 
 export async function markRead(id: string, messageId: string): Promise<void> {
-  markReadInDb(id, messageId)
   const { provider, email } = split(id)
   if (provider === 'gmail') await gmailMarkRead(email, messageId)
   else await outlookMarkRead(email, messageId)
+  markReadInDb(id, messageId)
 }
 
 export async function archive(id: string, messageId: string): Promise<void> {
   const { provider, email } = split(id)
   if (provider === 'gmail') await gmailArchive(email, messageId)
   else await outlookArchive(email, messageId)
+  updateMailLabelsInDb(id, messageId, ['INBOX'], ['ARCHIVE'])
 }
 
 export async function star(id: string, messageId: string, add: boolean): Promise<void> {
-  starInDb(id, messageId, add)
   const { provider, email } = split(id)
   if (provider === 'gmail') await gmailStar(email, messageId, add)
   else await outlookStar(email, messageId, add)
+  starInDb(id, messageId, add)
 }
 
 export async function trash(id: string, messageId: string): Promise<void> {
   const { provider, email } = split(id)
   if (provider === 'gmail') await gmailTrash(email, messageId)
   else await outlookTrash(email, messageId)
+  updateMailLabelsInDb(id, messageId, ['INBOX', 'SPAM', 'ARCHIVE'], ['TRASH'])
 }
 
 export async function syncAll(): Promise<void> {
