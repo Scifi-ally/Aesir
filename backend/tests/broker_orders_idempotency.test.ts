@@ -4,7 +4,6 @@ import { placeLiveOrder } from "../src/trading/broker_orders";
 import * as configModule from "../src/config";
 import * as authModule from "../src/upstox/auth";
 import * as scannerModule from "../src/analysis/stock_scanner";
-import { db } from "../db/src";
 
 vi.mock("axios");
 vi.mock("../src/config");
@@ -51,11 +50,15 @@ describe("Broker Orders Pre-Flight Idempotency Guard", () => {
     vi.spyOn(configModule, "getConfig").mockReturnValue({
       tradingMode: "LIVE",
       paperTradingEnabled: false,
+    // The test intentionally supplies only the config fields consumed by the order path.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     vi.spyOn(authModule, "getAccessToken").mockReturnValue("mock_token_123");
     vi.spyOn(scannerModule, "findStockBySymbol").mockResolvedValue({
       symbol: "RELIANCE",
       key: "NSE_EQ:INE002A01018",
+    // The scanner mock intentionally models only the fields consumed by the order path.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
   });
 

@@ -41,11 +41,15 @@ describe("Broker-side GTT Protection & Crash Resilience", () => {
     vi.spyOn(configModule, "getConfig").mockReturnValue({
       tradingMode: "LIVE",
       paperTradingEnabled: false,
+    // The test intentionally supplies only the config fields consumed by the order path.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     vi.spyOn(authModule, "getAccessToken").mockReturnValue("mock_token_123");
     vi.spyOn(scannerModule, "findStockBySymbol").mockResolvedValue({
       symbol: "RELIANCE",
       key: "NSE_EQ:INE002A01018",
+    // The scanner mock intentionally models only the fields consumed by the order path.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
   });
 

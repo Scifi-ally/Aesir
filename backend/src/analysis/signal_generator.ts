@@ -167,7 +167,6 @@ export interface DecisionTrace {
   confidencePath: "python_confluence" | "native_math_fallback";
   rankerBlendApplied: boolean;
   rejectionGate?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   rejectionValue?: number | string | boolean | string[] | null;
   threshold?: number;
   shap_values?: Record<string, number>;

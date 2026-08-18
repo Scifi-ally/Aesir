@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import http from "node:http";
+import type { IncomingHttpHeaders } from "node:http";
 import axios from "axios";
-import { placeLiveOrder, fetchBrokerPositions, fetchBrokerFunds } from "../src/trading/broker_orders";
+import { placeLiveOrder } from "../src/trading/broker_orders";
 import * as configModule from "../src/config";
 import * as authModule from "../src/upstox/auth";
 import * as scannerModule from "../src/analysis/stock_scanner";
@@ -38,8 +39,8 @@ vi.mock("../db/src", () => ({
 describe("Broker Orders Sandbox / Mock Upstox V2 Integration", () => {
   let mockServer: http.Server;
   let mockServerPort: number;
-  let lastReceivedPayload: any = null;
-  let lastReceivedHeaders: any = null;
+  let lastReceivedPayload: Record<string, unknown> | null = null;
+  let lastReceivedHeaders: IncomingHttpHeaders | null = null;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -47,12 +48,16 @@ describe("Broker Orders Sandbox / Mock Upstox V2 Integration", () => {
     vi.spyOn(configModule, "getConfig").mockReturnValue({
       tradingMode: "LIVE",
       paperTradingEnabled: false,
+    // The test intentionally supplies only the config fields consumed by the order path.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
     vi.spyOn(authModule, "getAccessToken").mockReturnValue("sandbox_access_token_xyz");
     vi.spyOn(scannerModule, "findStockBySymbol").mockResolvedValue({
       symbol: "TATASTEEL",
       key: "NSE_EQ:INE081A01020",
+    // The scanner mock intentionally models only the fields consumed by the order path.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
     // Create an actual local HTTP server acting as Upstox V2 sandbox API endpoint
@@ -139,7 +144,7 @@ describe("Broker Orders Sandbox / Mock Upstox V2 Integration", () => {
 
     expect(result.ok).toBe(true);
     expect(result.brokerOrderId).toBe("UPSTOX-SBX-ORDER-9999");
-    expect(lastReceivedHeaders["authorization"]).toBe("Bearer sandbox_access_token_xyz");
+    expect(lastReceivedHeaders?.["authorization"]).toBe("Bearer sandbox_access_token_xyz");
     expect(lastReceivedPayload).toEqual(
       expect.objectContaining({
         quantity: 50,
