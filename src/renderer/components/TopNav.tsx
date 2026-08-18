@@ -9,7 +9,7 @@ import codexIconUrl from '../../../icons/codex-dark-32px.png'
 import antigravityIconUrl from '../../../icons/google-antigravity-32px.png'
 import gmailIconUrl from '../../../icons/gmail-2026-32px.png'
 import githubIconUrl from '../../../icons/github-dark-32px.png'
-import mimirIconUrl from '../../../icons/mimiricon.png'
+import mimirIconUrl from '../../../icons/mimiricon-ui.png'
 
 function MimirIcon({ className }: { className?: string }) {
   return <img src={mimirIconUrl} className={className} />
@@ -228,12 +228,14 @@ export default function TopNav(): React.JSX.Element | null {
   // Tab key cycles through visible tabs in order
   useEffect(() => {
     const handleTabCycle = (e: KeyboardEvent) => {
-      // Only trigger on bare Tab press. Ignore if Shift, Ctrl, Meta, or Alt are pressed.
-      if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return
-      
+      // Keep native keyboard navigation inside forms, dialogs, menus, and buttons.
+      // Workspace cycling is only a convenience when focus is on the document body.
+      if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.target !== document.body) return
+      if (visibleTabs.length === 0) return
+
       e.preventDefault()
       const currentIdx = visibleTabs.findIndex(t => isTabActive(t))
-      
+
       // Cycle forwards on Tab
       const nextIdx = (currentIdx + 1) % visibleTabs.length
       
@@ -260,6 +262,8 @@ export default function TopNav(): React.JSX.Element | null {
             ref={menuBtnRef}
             onClick={() => setIsMenuOpen(!isMenuOpen)}
             title="Manage tabs"
+            aria-label="Manage workspace tabs"
+            aria-expanded={isMenuOpen}
             className="text-[#5A5A5A] text-[11px] uppercase font-bold tracking-widest hover:text-[#FFFFFF] transition-colors outline-none"
           >
             settings
@@ -268,12 +272,13 @@ export default function TopNav(): React.JSX.Element | null {
 
         {/* Center: Tabs */}
         <div className="no-drag flex shrink-0 items-center justify-center gap-[4px] relative">
-          <Reorder.Group
-            axis="x"
-            values={visibleTabIds}
-            onReorder={handleReorder}
-            className="flex items-center gap-[10px]"
-          >
+            <Reorder.Group
+              axis="x"
+              values={visibleTabIds}
+              onReorder={handleReorder}
+              aria-label="Workspace navigation"
+              className="flex items-center gap-[10px]"
+            >
             {visibleTabs.map((item) => {
               const active = isTabActive(item)
               return (
@@ -285,6 +290,8 @@ export default function TopNav(): React.JSX.Element | null {
                 >
                   <button
                     title={item.label}
+                    aria-label={item.label}
+                    aria-current={active ? 'page' : undefined}
                     onClick={() => setView(item.view)}
                     className="group relative flex items-center justify-center w-[36px] h-[36px] outline-none transition-all rounded-[10px]"
                   >
