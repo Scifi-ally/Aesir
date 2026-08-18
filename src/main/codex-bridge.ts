@@ -178,33 +178,43 @@ export async function spawnCodexOAuthLogin(): Promise<{ success: boolean }> {
     const proc = spawn(spawnBin, spawnArgs, { stdio: 'inherit', windowsHide: true })
     
     let isDone = false
+    let pollInFlight = false
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+
+    const finish = (result: { success: boolean }) => {
+      if (isDone) return
+      isDone = true
+      clearInterval(pollInterval)
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+      resolve(result)
+    }
 
     const pollInterval = setInterval(async () => {
-      const status = await checkCodexAuthStatus()
-      if (status.authenticated && !isDone) {
-        isDone = true
-        clearInterval(pollInterval)
-        try { proc.kill() } catch { /* ignore */ }
-        resolve({ success: true })
+      if (isDone || pollInFlight) return
+      pollInFlight = true
+      try {
+        const status = await checkCodexAuthStatus()
+        if (status.authenticated) {
+          try { proc.kill() } catch { /* ignore */ }
+          finish({ success: true })
+        }
+      } finally {
+        pollInFlight = false
       }
     }, 2000)
 
     proc.on('exit', async (code) => {
       if (!isDone) {
-        isDone = true
-        clearInterval(pollInterval)
         const finalStatus = await checkCodexAuthStatus()
-        resolve({ success: finalStatus.authenticated || code === 0 })
+        finish({ success: finalStatus.authenticated || code === 0 })
       }
     })
 
     // Timeout after 3 minutes
-    setTimeout(() => {
+    timeoutHandle = setTimeout(() => {
       if (!isDone) {
-        isDone = true
-        clearInterval(pollInterval)
         try { proc.kill() } catch { /* ignore */ }
-        resolve({ success: false })
+        finish({ success: false })
       }
     }, 180000)
   })

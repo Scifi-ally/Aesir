@@ -25,6 +25,8 @@ redisSubscriber.on("message", (channel: string, message: string) => {
 const wssInstances: WebSocketServer[] = [];
 let connectedCount = 0;
 let lastTickLog = 0;
+let authPruneTimer: ReturnType<typeof setInterval> | null = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 // Backpressure: skip high-frequency tick sends to clients whose socket send
 // buffer has grown past this. Ticks are ephemeral — dropping a batch for a
@@ -44,7 +46,7 @@ const AUTH_RATE_LIMIT = {
 };
 
 // Prune expired entries so the map cannot grow unbounded from one-off IPs
-setInterval(() => {
+authPruneTimer = setInterval(() => {
   const now = Date.now();
   for (const [ip, t] of authAttempts) {
     const expired = t.banned
@@ -52,7 +54,8 @@ setInterval(() => {
       : now - t.firstAttempt > AUTH_RATE_LIMIT.windowMs;
     if (expired) authAttempts.delete(ip);
   }
-}, 60000).unref();
+}, 60000);
+authPruneTimer.unref();
 
 // Cap the per-client batch/watchlist subscription set — an unbounded set is a
 // memory leak and forces the tick filter to scan huge sets on every broadcast.
@@ -392,7 +395,7 @@ export function initWebSocketServer(server: Server): void {
   setupWs(wssMarketData, "market-data");
 
   // Server-side heartbeat: terminate dead connections every 30s
-  setInterval(() => {
+  heartbeatTimer = setInterval(() => {
     wssInstances.forEach((wss) => {
       wss.clients.forEach((ws) => {
         const alive = ws as WebSocket & { isAlive: boolean };
@@ -405,9 +408,32 @@ export function initWebSocketServer(server: Server): void {
         ws.ping();
       });
     });
-  }, 30000).unref();
+  }, 30000);
+  heartbeatTimer.unref();
 
-  logger.info("WebSocket servers initialized at /ws/intelligence and /ws/market-data");
+    logger.info("WebSocket servers initialized at /ws/intelligence and /ws/market-data");
+}
+
+export async function closeWebSocketServer(): Promise<void> {
+  if (authPruneTimer) {
+    clearInterval(authPruneTimer);
+    authPruneTimer = null;
+  }
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+
+  const instances = wssInstances.splice(0, wssInstances.length);
+  await Promise.all(instances.map(async (wss) => {
+    for (const client of wss.clients) client.terminate();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  }));
+  connectedCount = 0;
+  authAttempts.clear();
+  if (redisSubscriber.status !== "end") {
+    await redisSubscriber.quit().catch(() => redisSubscriber.disconnect());
+  }
 }
 
 /**

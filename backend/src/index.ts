@@ -3,14 +3,14 @@ import { config as dotenvConfig } from "dotenv";
 import http from "http";
 import app from "./app";
 import { logger } from "./lib/logger";
-import { initWebSocketServer } from "./ws/websocket_server";
+import { closeWebSocketServer, initWebSocketServer } from "./ws/websocket_server";
 import { startScheduler, stopScheduler } from "./scheduler/jobs";
 import { initConfigFromDb } from "./config";
 import { initAccessTokenFromDb } from "./upstox/auth";
 import { logSecurityMode } from "./lib/security";
 import { startMarketIntelligence, marketIntelligence } from "./intelligence/orchestrator";
 import { initPaperEngine } from "./trading/paper_engine";
-import { startBrokerReconciliationLoop } from "./trading/reconciler";
+import { startBrokerReconciliationLoop, stopBrokerReconciliationLoop } from "./trading/reconciler";
 import { db, pool } from "../db/src";
 import { sql } from "drizzle-orm";
 import { redisClient } from "./lib/redis";
@@ -50,8 +50,9 @@ for (let i = 0; i < 15; i++) {
     await db.execute(sql`SELECT 1`);
     dbReady = true;
     break;
-  } catch (err: any) {
-    logger.info({ err: err.message || err }, `Waiting for database to start... (Attempt ${i + 1}/15)`);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : err;
+    logger.info({ err: message }, `Waiting for database to start... (Attempt ${i + 1}/15)`);
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
 }
@@ -112,7 +113,9 @@ async function gracefulShutdown(signal: string) {
     if (typeof stopScheduler === 'function') {
       stopScheduler();
     }
+    stopBrokerReconciliationLoop();
     marketIntelligence.stop();
+    await closeWebSocketServer();
     
     // Wait for in-flight operations to complete (max 30 seconds)
     logger.info("Waiting for in-flight operations to complete...");

@@ -3,7 +3,7 @@ import { config as dotenvConfig } from "dotenv";
 import http from "http";
 import app from "./app";
 import { logger } from "./lib/logger";
-import { initWebSocketServer, broadcast } from "./ws/websocket_server";
+import { closeWebSocketServer, initWebSocketServer, broadcast } from "./ws/websocket_server";
 import { initConfigFromDb } from "./config";
 import { initAccessTokenFromDb } from "./upstox/auth";
 import { logSecurityMode } from "./lib/security";
@@ -34,6 +34,8 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 const server = http.createServer(app);
+let isShuttingDown = false;
+let eventLoopLagTimer: ReturnType<typeof setInterval> | null = null;
 
 initWebSocketServer(server);
 logSecurityMode();
@@ -93,11 +95,34 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 let lastCheck = Date.now();
-setInterval(() => {
+eventLoopLagTimer = setInterval(() => {
   const now = Date.now();
   const lag = now - lastCheck - 1000;
   if (lag > 50) {
     logger.warn({ lagMs: lag }, "API Server Event Loop Lag Detected");
   }
   lastCheck = now;
-}, 1000).unref();
+}, 1000);
+eventLoopLagTimer.unref();
+
+async function shutdown(signal: string): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  logger.info({ signal }, "API Server shutting down");
+  if (eventLoopLagTimer) {
+    clearInterval(eventLoopLagTimer);
+    eventLoopLagTimer = null;
+  }
+  await closeWebSocketServer();
+  await redisSub.quit().catch(() => redisSub.disconnect());
+  await new Promise<void>((resolve) => {
+    if (!server.listening) {
+      resolve();
+      return;
+    }
+    server.close(() => resolve());
+  });
+}
+
+process.once("SIGINT", () => { void shutdown("SIGINT"); });
+process.once("SIGTERM", () => { void shutdown("SIGTERM"); });

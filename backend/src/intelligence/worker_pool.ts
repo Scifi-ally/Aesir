@@ -1,4 +1,4 @@
-import { Worker } from "node:worker_threads";
+import { Worker, type WorkerOptions } from "node:worker_threads";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
@@ -53,6 +53,7 @@ export class ThreadWorkerPool {
   private completed = 0;
   private failed = 0;
   private shuttingDown = false;
+  private readonly disabledForTests = process.env.NODE_ENV === "test" || process.env.VITEST === "true";
   // Workers whose replacement was already spawned (timeout path) — their
   // exit event must not spawn another.
   private readonly replacedWorkers = new Set<Worker>();
@@ -63,8 +64,9 @@ export class ThreadWorkerPool {
     private readonly size: number,
     private maxQueueSize = 500,
     private readonly taskTimeoutMs = 10000,
+    private readonly workerOptions: WorkerOptions = {},
   ) {
-    this.init();
+    if (!this.disabledForTests) this.init();
   }
 
   private init() {
@@ -83,6 +85,7 @@ export class ThreadWorkerPool {
   private spawnWorker() {
     const spawnedAt = Date.now();
     const worker = new Worker(this.scriptPath, {
+      ...this.workerOptions,
       workerData: { poolName: this.name },
     });
 
@@ -193,6 +196,9 @@ export class ThreadWorkerPool {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   enqueue<T>(type: string, payload: any): Promise<T> {
+    if (this.disabledForTests) {
+      return Promise.reject(new Error(`Worker pool '${this.name}' is disabled in the test runtime`));
+    }
     return new Promise<T>((resolve, reject) => {
       if (this.taskQueue.length >= this.maxQueueSize) {
         // Dynamic Backpressure: Reject new incoming tasks immediately so producer can backoff
@@ -310,13 +316,19 @@ export class ThreadWorkerPool {
 // Resolve the path of the compiled worker script relative to the execution directory
 const isEsm = typeof import.meta !== "undefined";
 const dirname = globalThis.__dirname || (isEsm ? path.dirname(fileURLToPath(import.meta.url)) : __dirname);
-const workerScriptPath = path.resolve(dirname, "intelligence/workers/intelligence_worker.mjs");
-
+const runningFromTypeScript = import.meta.url.endsWith(".ts");
+const workerScriptPath = path.resolve(
+  dirname,
+  runningFromTypeScript ? "workers/intelligence_worker.ts" : "intelligence/workers/intelligence_worker.mjs",
+);
+const workerOptions: WorkerOptions = runningFromTypeScript
+  ? { execArgv: ["--import=tsx/esm"] }
+  : {};
 export const intelligenceWorkerPools = {
-  candidateDetection: new ThreadWorkerPool("candidate_detection", workerScriptPath, 2, 500, 10000),
-  technicalAnalysis: new ThreadWorkerPool("technical_analysis", workerScriptPath, 2, 200, 10000),
-  aiRanking: new ThreadWorkerPool("ai_ranking", workerScriptPath, 1, 100, 15000),
-  historicalLoading: new ThreadWorkerPool("historical_loading", workerScriptPath, 1, 50, 30000),
+  candidateDetection: new ThreadWorkerPool("candidate_detection", workerScriptPath, 2, 500, 10000, workerOptions),
+  technicalAnalysis: new ThreadWorkerPool("technical_analysis", workerScriptPath, 2, 200, 10000, workerOptions),
+  aiRanking: new ThreadWorkerPool("ai_ranking", workerScriptPath, 1, 100, 15000, workerOptions),
+  historicalLoading: new ThreadWorkerPool("historical_loading", workerScriptPath, 1, 50, 30000, workerOptions),
 };
 
 export function getWorkerPoolStats(): PoolStats[] {

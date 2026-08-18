@@ -62,10 +62,17 @@ export async function reconcileBrokerPositions(): Promise<void> {
 }
 
 export function startBrokerReconciliationLoop(intervalMs = 60000): void {
-  if (_reconciliationTimer) clearInterval(_reconciliationTimer);
+  stopBrokerReconciliationLoop();
   _reconciliationTimer = setInterval(() => {
     reconcileBrokerPositions().catch((err) => {
       logger.error({ err }, "Reconciliation error");
     });
   }, intervalMs);
+}
+
+export function stopBrokerReconciliationLoop(): void {
+  if (_reconciliationTimer) {
+    clearInterval(_reconciliationTimer);
+    _reconciliationTimer = null;
+  }
 }

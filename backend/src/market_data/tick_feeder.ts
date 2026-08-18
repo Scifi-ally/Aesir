@@ -1,8 +1,6 @@
 import { logger } from "../lib/logger";
 import { stateStore } from "../lib/redis_state";
-import yahooFinanceModule from 'yahoo-finance2';
-const Ctor = (yahooFinanceModule as any).default?.default || (yahooFinanceModule as any).default || yahooFinanceModule;
-const yahooFinance = typeof Ctor === 'function' ? new (Ctor as any)({ suppressNotices: ['yahooSurvey'] }) : Ctor;
+import { yahooFinance } from "../lib/yahoo-finance";
 import { broadcast } from "../ws/websocket_server";
 import { createServerEvent } from "../ws/events";
 import { intelligenceBus } from "../intelligence/event_bus";
@@ -48,6 +46,7 @@ let tickUpdateQueue: TickData[] = [];
 let redisBatchQueue: Record<string, TickData[]> = {};
 let redisBatchTimer: ReturnType<typeof setInterval> | null = null;
 let volumePollerTimer: ReturnType<typeof setInterval> | null = null;
+let volumePollInFlight = false;
 let eventBusUnsubscribe: (() => void) | null = null;
 let reconnectUnsubscribe: (() => void) | null = null;
 let lastTickTimestamp: number = 0;
@@ -238,8 +237,9 @@ function startVolumePoller(): void {
   if (volumePollerTimer) clearInterval(volumePollerTimer);
 
   volumePollerTimer = setInterval(async () => {
-    if (subscriptions.size === 0) return;
+    if (volumePollInFlight || subscriptions.size === 0) return;
     if (!isMarketOpen()) return; // Yahoo quotes are meaningless off-session
+    volumePollInFlight = true;
 
     try {
       // Indices carry "_INDEX" in their instrumentKey (e.g. "NSE_INDEX|Nifty 50");
@@ -292,6 +292,8 @@ function startVolumePoller(): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       logger.error({ err: err.message }, "Failed to poll volume data");
+    } finally {
+      volumePollInFlight = false;
     }
   }, 60000); // Poll every minute
 }
@@ -370,11 +372,11 @@ export function stopTickFeeder(): void {
     redisBatchTimer = null;
   }
 
-  if (volumePollerTimer) {
+    if (volumePollerTimer) {
     clearInterval(volumePollerTimer);
     volumePollerTimer = null;
   }
-
+  volumePollInFlight = false;
   subscriptions.clear();
   tickUpdateQueue = [];
   redisBatchQueue = {};

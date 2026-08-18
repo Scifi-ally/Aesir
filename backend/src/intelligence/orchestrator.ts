@@ -45,6 +45,8 @@ class ScannerOrchestrator {
   private frontendTimer: ReturnType<typeof setInterval> | null = null;
   private breadthTimer: ReturnType<typeof setInterval> | null = null;
   private staleDataTimer: ReturnType<typeof setInterval> | null = null;
+  private telemetryTimer: ReturnType<typeof setInterval> | null = null;
+  private telemetryInFlight = false;
   private subscriptions: Array<() => void> = [];
   private lastCandidateEval = new Map<string, number>();
   private aiRankingTimer: NodeJS.Timeout | null = null;
@@ -263,11 +265,14 @@ class ScannerOrchestrator {
     if (this.frontendTimer) clearInterval(this.frontendTimer);
     if (this.breadthTimer) clearInterval(this.breadthTimer);
     if (this.staleDataTimer) clearInterval(this.staleDataTimer);
+    if (this.telemetryTimer) clearInterval(this.telemetryTimer);
     if (this.aiRankingTimer) clearTimeout(this.aiRankingTimer);
     if (this.trimDebounceTimer) clearTimeout(this.trimDebounceTimer);
     this.frontendTimer = null;
     this.breadthTimer = null;
     this.staleDataTimer = null;
+    this.telemetryTimer = null;
+    this.telemetryInFlight = false;
     this.aiRankingTimer = null;
     this.trimDebounceTimer = null;
     this.lastCandidateEval.clear();
@@ -422,7 +427,9 @@ class ScannerOrchestrator {
       }, 1_000);
       
       // Compute telemetry every 60s
-      setInterval(async () => {
+      this.telemetryTimer = setInterval(async () => {
+        if (this.telemetryInFlight) return;
+        this.telemetryInFlight = true;
         try {
           const telemetry = await this.telemetry.computeDecayTelemetry();
           if (telemetry) {
@@ -430,6 +437,8 @@ class ScannerOrchestrator {
           }
         } catch (e) {
           logger.error({ err: e }, "Telemetry engine update failed");
+        } finally {
+          this.telemetryInFlight = false;
         }
       }, 60000);
     }
