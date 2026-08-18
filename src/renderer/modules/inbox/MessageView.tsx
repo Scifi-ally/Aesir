@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { MailBody, MailHeader } from '@shared/types'
 import { ErrorState, Loading } from '../../components/ui'
 import { useApp } from '../../state'
@@ -22,18 +22,34 @@ export default function MessageView({
   const [body, setBody] = useState<MailBody | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [reloadToken, setReloadToken] = useState(0)
 
-  const load = (): void => {
+  const load = useCallback(() => {
+    setReloadToken((value) => value + 1)
+  }, [])
+
+  useEffect(() => {
+    let active = true
     setLoading(true)
     setError(null)
-    window.devhub.mail
-      .body(header.accountId, header.id)
-      .then(setBody)
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false))
-  }
+    setBody(null)
 
-  useEffect(load, [header.accountId, header.id])
+    void window.devhub.mail
+      .body(header.accountId, header.id)
+      .then((nextBody) => {
+        if (active) setBody(nextBody)
+      })
+      .catch((e: Error) => {
+        if (active) setError(e.message)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [header.accountId, header.id, reloadToken])
 
   useEffect(() => {
     if (header.unread) {

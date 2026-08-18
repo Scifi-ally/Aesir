@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MailAccount, MailHeader, MailProvider } from '@shared/types'
 import { Button, ErrorState, Loading } from '../../components/ui'
 import { useApp } from '../../state'
@@ -34,6 +34,7 @@ export default function Inbox(): React.JSX.Element {
   const [renderLimit, setRenderLimit] = useState(30)
 
   const [labels, setLabels] = useState<any[]>([])
+  const folderRequestRef = useRef(0)
   
   useEffect(() => {
     let interval = setInterval(() => {
@@ -79,27 +80,32 @@ export default function Inbox(): React.JSX.Element {
 
   const loadFolder = useCallback(
     (acctId: string | null, tabId: string, q: string, background = false) => {
-      if (!acctId) return setHeaders([])
+      const requestId = ++folderRequestRef.current
+      const isCurrent = () => requestId === folderRequestRef.current
+      if (!acctId) {
+        setHeaders([])
+        return
+      }
       
       void (async () => {
         try {
           if (q) {
             if (!background) setSyncing(true)
             const res = await window.devhub.mail.search(acctId, q)
-            setHeaders(res)
-            if (!background) setSyncing(false)
+            if (isCurrent()) setHeaders(res)
+            if (!background && isCurrent()) setSyncing(false)
             return
           }
           if (tabId === 'draft' || tabId === 'drafts') {
             const cached = await window.devhub.mail.cachedFolder(acctId, 'DRAFT')
             if (Array.isArray(cached) && cached.length > 0) {
-              setHeaders(cached)
-            } else if (!background) {
+              if (isCurrent()) setHeaders(cached)
+            } else if (!background && isCurrent()) {
               setSyncing(true)
             }
             const res = await window.devhub.mail.drafts(acctId)
-            if (Array.isArray(res) && res.length > 0) setHeaders(res)
-            setSyncing(false)
+            if (Array.isArray(res) && res.length > 0 && isCurrent()) setHeaders(res)
+            if (isCurrent()) setSyncing(false)
             return
           }
           
@@ -117,7 +123,7 @@ export default function Inbox(): React.JSX.Element {
           const cached = await window.devhub.mail.cachedFolder(acctId, labelId)
           const hasCached = Array.isArray(cached) && cached.length > 0
           if (hasCached) {
-            setHeaders(cached)
+            if (isCurrent()) setHeaders(cached)
           }
 
           // 2. Fetch fresh mails in background & prepend new mails to SQLite DB
@@ -127,13 +133,13 @@ export default function Inbox(): React.JSX.Element {
             ? await window.devhub.mail.search(acctId, 'in:anywhere')
             : await window.devhub.mail.folder(acctId, labelId)
           
-          if (Array.isArray(fresh) && fresh.length > 0) {
+          if (Array.isArray(fresh) && fresh.length > 0 && isCurrent()) {
             setHeaders(fresh)
           }
         } catch (e) {
-          setError((e as Error).message)
+          if (isCurrent()) setError((e as Error).message)
         } finally {
-          setSyncing(false)
+          if (isCurrent()) setSyncing(false)
         }
       })()
     },
@@ -144,9 +150,11 @@ export default function Inbox(): React.JSX.Element {
     void (async () => {
       try {
         const list = await loadAccounts()
-        const acctId = selectedAccount || (list.length > 0 ? list[0].id : null)
-        if (acctId && !selectedAccount) {
+        const savedAccountExists = Boolean(selectedAccount && list.some((account) => account.id === selectedAccount))
+        const acctId = savedAccountExists ? selectedAccount : (list.length > 0 ? list[0].id : null)
+        if (acctId !== selectedAccount) {
           setSelectedAccount(acctId)
+          if (!acctId) localStorage.removeItem('devhub_inbox_account')
         }
       } catch (e) {
         setError((e as Error).message)
