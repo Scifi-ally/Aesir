@@ -1,4 +1,4 @@
-import { db, suggestionsTable, rejectedCandidatesTable } from "../../db/src";
+import { db, suggestionsTable, rejectedCandidatesTable } from "../db/src";
 import { gte } from "drizzle-orm";
 
 async function run() {

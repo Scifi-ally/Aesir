@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { DetailPanel } from './DetailPanel';
+import { DetailPanel } from '../../../../../renderer/modules/mimir/components/DetailPanel';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect, vi } from 'vitest';
 

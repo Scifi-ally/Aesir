@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateSuggestionTiming } from "./timing";
+import { calculateSuggestionTiming } from "../../../src/suggestions/timing";
 
 describe("calculateSuggestionTiming", () => {
   it("bounds intraday suggestions to the remaining market session", () => {

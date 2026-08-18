@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { costPerSideFraction, netPnl, costR } from "./costs";
+import { costPerSideFraction, netPnl, costR } from "../../../src/lib/costs";
 
 // Default config: slippageBps=5 → 0.0005/side, identical to the pre-Phase-3 flat
 // constant these three call sites used to each carry.

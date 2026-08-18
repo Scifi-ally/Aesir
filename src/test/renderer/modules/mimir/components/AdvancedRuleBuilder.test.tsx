@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { AdvancedRuleBuilder } from './AdvancedRuleBuilder';
+import { AdvancedRuleBuilder } from '../../../../../renderer/modules/mimir/components/AdvancedRuleBuilder';
 import { describe, it, expect, vi } from 'vitest';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';

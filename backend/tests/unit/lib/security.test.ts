@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isLocalRequest } from "./security";
+import { isLocalRequest } from "../../../src/lib/security";
 import type { Request } from "express";
 
 describe("security.ts - IP spoofing defense", () => {

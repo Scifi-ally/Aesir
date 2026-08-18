@@ -1,27 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { runIntelligencePipeline } from './signal_generator';
-import * as aiClient from './ai_client';
-import type { ScanResult } from './stock_scanner';
+import { runIntelligencePipeline } from '../../../src/analysis/signal_generator';
+import * as aiClient from '../../../src/analysis/ai_client';
+import type { ScanResult } from '../../../src/analysis/stock_scanner';
 
 // Mock dependencies
-vi.mock('./ai_client', () => ({
+vi.mock('../../../src/analysis/ai_client', () => ({
   checkAIHealth: vi.fn(),
   batchInference: vi.fn(),
   getConfluenceScore: vi.fn()
 }));
 
-vi.mock('./regime_detector', () => ({
+vi.mock('../../../src/analysis/regime_detector', () => ({
   detectRegime: vi.fn(() => ({ regime: 'BULLISH_EXPANSION', confidence: 80 })),
   getLastRegimeOutput: vi.fn(() => ({ regime: 'BULLISH_EXPANSION', confidence: 80 }))
 }));
 
-vi.mock('./scanner_activation', () => ({
+vi.mock('../../../src/analysis/scanner_activation', () => ({
   getScannerActivation: vi.fn(() => ({ active: true, reason: 'test', enabled: ['TestScanner'], disabled: [] })),
   isScannerEnabled: vi.fn(() => true),
   setupTypeToScannerType: vi.fn(() => 'TestScanner')
 }));
 
-vi.mock('./risk_engine', () => ({
+vi.mock('../../../src/analysis/risk_engine', () => ({
   assessRisk: vi.fn(() => ({
     passed: true,
     rejectionReasons: [],
@@ -34,19 +34,19 @@ vi.mock('./risk_engine', () => ({
   syncRiskEngineState: vi.fn()
 }));
 
-vi.mock('./earnings_filter', () => ({
+vi.mock('../../../src/analysis/earnings_filter', () => ({
   checkEarningsRisk: vi.fn(() => ({ riskLevel: 'SAFE' }))
 }));
 
-vi.mock('./mtf_filter', () => ({
+vi.mock('../../../src/analysis/mtf_filter', () => ({
   mtfFilter: vi.fn(() => ({ passed: true, reason: 'Mocked MTF passed', trend: 'UP' }))
 }));
 
-vi.mock('../config', () => ({
+vi.mock('../../../src/config', () => ({
   getConfig: vi.fn(() => ({ minAutoConfidencePct: 60, strictRegimeGate: false, slippageBps: 5 }))
 }));
 
-vi.mock('./feature_engine', () => ({
+vi.mock('../../../src/analysis/feature_engine', () => ({
   computeFeatureVector: vi.fn(() => ({
     regimeScore: 50,
     sectorStrength: 1,
@@ -57,7 +57,7 @@ vi.mock('./feature_engine', () => ({
   toRankerFeatureArray: vi.fn(() => [])
 }));
 
-vi.mock('../../db/src', () => ({
+vi.mock('../../../db/src', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),

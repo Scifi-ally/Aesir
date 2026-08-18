@@ -15,5 +15,5 @@
     "types": ["node"],
     "outDir": "dist"
   },
-  "include": ["src", "db"]
+  "include": ["src", "db", "tests"]
 }

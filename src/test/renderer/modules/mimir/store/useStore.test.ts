@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useStore } from './useStore';
+import { useStore } from '../../../../../renderer/modules/mimir/store/useStore';
 
 describe('useStore', () => {
   beforeEach(() => {
