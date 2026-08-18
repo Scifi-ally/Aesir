@@ -57,7 +57,7 @@ The remaining backend findings are isolated to the development-time Drizzle Kit 
 
 ## Published history
 
-The published `main` history contains the original initial commit plus seven real remediation commits. All remediation commits were created during this audit on 17–18 August 2026; none were backdated. The current follow-up engineering changes described above remain uncommitted for review.
+The published `main` history contains the original initial commit, seven earlier remediation commits, and thirteen additional substantive follow-up commits. All remediation commits were created during this audit on 17–18 August 2026; none were backdated. The follow-up engineering pass is now published on `main` in reviewable commits authored under the configured Scifi-ally identity.
 
 | Commit | Subject | Purpose |
 | --- | --- | --- |
@@ -69,6 +69,8 @@ The published `main` history contains the original initial commit plus seven rea
 | `18be57b40` | `ci: validate desktop and backend builds` | Add GitHub Actions validation for both packages. |
 | `8fc5c755f` | `fix(config): keep environment examples non-secret` | Keep the example database setting empty for safer automated scanning. |
 | `170173d` | `docs(audit): record findings validation and history policy` | Record the completed audit, validation evidence, and honest-history decision. |
+
+The follow-up engineering commits are the thirteen commits from `175a6b0` through `32f2a9a`, covering renderer performance, mail correctness, Mimir request resilience, backend lifecycle safety, typed market-data integration, test-tree organization, lint cleanup, tooling, CI, and final documentation.
 
 ## Commit-history integrity decision
 
